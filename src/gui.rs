@@ -834,10 +834,10 @@ fn set_queue_for_my_music(&mut self) {
             Ok(i) => i,
             Err(e) => { self.hotkey_status = format!("tray unavailable: {}", api::sanitize_output(&format!("{e:#}"))); return; }
         };
-        let show = MenuItem::new("????????", true, None);
-        let playpause = MenuItem::new("????? / ??????", true, None);
-        let next = MenuItem::new("?????????", true, None);
-        let quit = MenuItem::new("?????", true, None);
+        let show = MenuItem::new("\u{041F}\u{043E}\u{043A}\u{0430}\u{0437}\u{0430}\u{0442}\u{044C}", true, None);
+        let playpause = MenuItem::new("\u{041F}\u{0430}\u{0443}\u{0437}\u{0430} / \u{0418}\u{0433}\u{0440}\u{0430}\u{0442}\u{044C}", true, None);
+        let next = MenuItem::new("\u{0421}\u{043B}\u{0435}\u{0434}\u{0443}\u{044E}\u{0449}\u{0438}\u{0439}", true, None);
+        let quit = MenuItem::new("\u{0412}\u{044B}\u{0445}\u{043E}\u{0434}", true, None);
         self.tray_menu_show_id = show.id().0.clone();
         self.tray_menu_playpause_id = playpause.id().0.clone();
         self.tray_menu_next_id = next.id().0.clone();
