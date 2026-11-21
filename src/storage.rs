@@ -21,9 +21,12 @@ pub struct SavedTrack {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Settings {
+    #[serde(default)]
     volume: Option<f32>,
     #[serde(default)]
     last_track: Option<SavedTrack>,
+    #[serde(default)]
+    repeat: Option<String>,
 }
 
 pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
@@ -66,6 +69,16 @@ pub fn load_last_track() -> Option<SavedTrack> {
 pub fn save_last_track(track: &SavedTrack) {
     let mut settings = load_settings();
     settings.last_track = Some(track.clone());
+    let _ = save_settings(&settings);
+}
+
+pub fn load_repeat() -> String {
+    load_settings().repeat.unwrap_or_else(|| "off".to_string())
+}
+
+pub fn save_repeat(repeat: &str) {
+    let mut settings = load_settings();
+    settings.repeat = Some(repeat.to_string());
     let _ = save_settings(&settings);
 }
 

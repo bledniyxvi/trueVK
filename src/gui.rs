@@ -160,6 +160,28 @@ enum MediaHotkey {
     Prev,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepeatMode {
+    Off,
+    All,
+    One,
+}
+
+impl RepeatMode {
+    fn from_str(s: &str) -> Self {
+        match s { "all" => Self::All, "one" => Self::One, _ => Self::Off }
+    }
+    fn as_str(self) -> &'static str {
+        match self { Self::Off => "off", Self::All => "all", Self::One => "one" }
+    }
+    fn next(self) -> Self {
+        match self { Self::Off => Self::All, Self::All => Self::One, Self::One => Self::Off }
+    }
+    fn label(self) -> &'static str {
+        match self { Self::Off => "\u{0432}\u{044B}\u{043A}\u{043B}", Self::All => "\u{0432}\u{0441}\u{0435}", Self::One => "1" }
+    }
+}
+
 enum UiEvent {
     TracksLoaded { offset: usize, count: Option<u64>, items: Vec<Track> },
     PlaylistsLoaded { offset: usize, count: Option<u64>, items: Vec<PlaylistView> },
@@ -263,6 +285,7 @@ struct GuiAppImpl {
     quit_requested: bool,
     last_tray_tooltip: String,
     my_filter: String,
+    repeat_mode: RepeatMode,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -394,6 +417,7 @@ impl GuiAppImpl {
             quit_requested: false,
             last_tray_tooltip: String::new(),
             my_filter: String::new(),
+            repeat_mode: RepeatMode::from_str(&storage::load_repeat()),
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -757,6 +781,10 @@ fn set_queue_for_my_music(&mut self) {
         None
     }
 
+    fn first_playable_in_queue(&self) -> Option<TrackId> {
+        self.queue.iter().find(|t| t.is_playable()).map(TrackId::from_track)
+    }
+
     fn play_next(&mut self) {
         let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
         if let Some(next) = self.find_next_playable_id(cur, 1) {
@@ -768,7 +796,43 @@ fn set_queue_for_my_music(&mut self) {
             self.request_recommendations_more();
             return;
         }
+        if self.repeat_mode == RepeatMode::All {
+            if let Some(first) = self.first_playable_in_queue() {
+                self.play_track_id(first);
+                return;
+            }
+        }
         self.now_playing = None;
+    }
+
+    fn play_next_autoplay(&mut self) {
+        let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
+        if self.repeat_mode == RepeatMode::One {
+            if self.queue.iter().any(|t| TrackId::from_track(t) == cur && t.is_playable()) {
+                self.play_track_id(cur);
+                return;
+            }
+            self.now_playing = None;
+            self.sync_tray_tooltip("vkmusic");
+            return;
+        }
+        if let Some(next) = self.find_next_playable_id(cur, 1) {
+            self.play_track_id(next);
+            return;
+        }
+        if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
+            self.rec_waiting_next = true;
+            self.request_recommendations_more();
+            return;
+        }
+        if self.repeat_mode == RepeatMode::All {
+            if let Some(first) = self.first_playable_in_queue() {
+                self.play_track_id(first);
+                return;
+            }
+        }
+        self.now_playing = None;
+        self.sync_tray_tooltip("vkmusic");
     }
 
     fn play_prev(&mut self) {
@@ -1348,7 +1412,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
                 PlayerEvent::Ended { generation } => {
                     if generation == self.current_gen {
-                        self.play_next();
+                        self.play_next_autoplay();
                     }
                 }
                 PlayerEvent::Position { position_secs, duration_secs } => {
@@ -1361,6 +1425,8 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 PlayerEvent::Volume(vol) => { self.volume = vol.clamp(0.0, 1.0); }
                 PlayerEvent::Error(msg) => {
                     self.pending_play_track_id = None;
+                    self.now_playing = None;
+                    self.sync_tray_tooltip("vkmusic");
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
@@ -1681,7 +1747,13 @@ impl eframe::App for GuiAppImpl {
                     }
                     let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
                     ui.add(egui::Label::new(format!("{pct}%")).selectable(false));
-                    ui.add(egui::Label::new("Громкость").selectable(false));
+                    ui.add(egui::Label::new("D\"??D_D?D?D_???,?O").selectable(false));
+                    ui.separator();
+                    let rep_label = format!("\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: {}", self.repeat_mode.label());
+                    if ui.small_button(rep_label).clicked() {
+                        self.repeat_mode = self.repeat_mode.next();
+                        storage::save_repeat(self.repeat_mode.as_str());
+                    }
                 });
             });
 
