@@ -15,6 +15,9 @@ const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{
 const SHUFFLE_ON: &str = "\u{0432}\u{043A}\u{043B}";
 const SHUFFLE_OFF: &str = "\u{0432}\u{044B}\u{043A}\u{043B}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
+const TRACK_ROW_HEIGHT: f32 = 44.0;
+const ADD_TRACK_TOOLTIP: &str = "\u{0414}\u{043E}\u{0431}\u{0430}\u{0432}\u{0438}\u{0442}\u{044C} \u{0432} \u{043C}\u{043E}\u{044E} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0443}";
+const REMOVE_TRACK_TOOLTIP: &str = "\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -1717,49 +1720,62 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
     }
 
     fn render_track_row(&mut self, ui: &mut egui::Ui, i: usize, track: &Track, width: f32, row_h: f32, source: QueueSource, playing_in_this_list: bool) {
-        let is_selected = self.selected_index == Some(i);
         let is_playing = playing_in_this_list;
         let playable = track.is_playable();
         let dur = track.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-        let idx_text = format!("{:>3}", i + 1);
-        let title_text = format!("{} - {}", track.artist, track.title);
+        let idx_text = format!("{:>2}", i + 1);
+        let title_text = track.title.clone();
+        let artist_text = track.artist.clone();
         self.ensure_cjk_font(ui.ctx(), &title_text);
-        let fill = if is_playing {
-            Some(ui.visuals().selection.bg_fill)
-        } else if is_selected {
-            Some(ui.visuals().widgets.active.bg_fill.gamma_multiply(0.35))
-        } else {
-            None
-        };
+        self.ensure_cjk_font(ui.ctx(), &artist_text);
+        let tid = TrackId::from_track(track);
+        let delete_confirm = source == QueueSource::MyMusic
+            && matches!(self.delete_states.get(&tid), Some(DeleteState::Confirm));
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
-        let resp = if playable {
-            resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-        } else {
-            resp
-        };
-        if let Some(fill) = fill {
-            ui.painter().rect_filled(rect, 0.0, fill);
-        } else if resp.hovered() && playable {
-            ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
+        let pointer_over_row = ui.ctx().pointer_latest_pos().map_or(false, |pos| rect.contains(pos));
+        let row_hovered = pointer_over_row && playable;
+        if playable && pointer_over_row {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        let inner = rect.shrink2(egui::vec2(8.0, 0.0));
+        let corner = egui::CornerRadius::same(6);
+        if is_playing {
+            ui.painter().rect_filled(rect, corner, theme::SELECTED);
+            let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, row_h));
+            ui.painter().rect_filled(bar, egui::CornerRadius::same(0), theme::ACCENT);
+        } else if row_hovered {
+            ui.painter().rect_filled(rect, corner, theme::HOVER);
+        }
+        let inner = rect.shrink2(egui::vec2(10.0, 0.0));
         let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
         row_ui.set_min_height(row_h);
-        let muted = ui.visuals().weak_text_color();
-        let normal = ui.visuals().text_color();
-        let color = if playable { normal } else { muted };
-        row_ui.add(egui::Label::new(egui::RichText::new(idx_text).monospace().color(color)).selectable(false));
-        row_ui.add_space(8.0);
-
-        let tid = TrackId::from_track(track);
-        let action_clicked = self.render_track_action(&mut row_ui, track, source, &tid, &resp);
-
-        row_ui.add_space(6.0);
-        let mut title_rt = egui::RichText::new(title_text).color(color);
-        if is_playing { title_rt = title_rt.strong(); }
-        row_ui.add(egui::Label::new(title_rt).selectable(false).truncate());
+        row_ui.allocate_ui_with_layout(egui::vec2(44.0, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            if is_playing {
+                let center = ui.max_rect().center();
+                let tri = egui::Rect::from_center_size(center, egui::vec2(10.0, 12.0));
+                ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::ACCENT));
+            } else {
+                ui.add(egui::Label::new(egui::RichText::new(idx_text).font(theme::mono_font(13.0)).color(theme::MUTED)).selectable(false));
+            }
+        });
+        row_ui.add_space(4.0);
+        let action_w = if delete_confirm { 170.0 } else { 52.0 };
+        let action_clicked = row_ui.allocate_ui_with_layout(egui::vec2(action_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            self.render_track_action(ui, track, source, &tid, &resp, pointer_over_row || delete_confirm)
+        }).inner;
+        row_ui.add_space(4.0);
+        let dim = theme::MUTED.gamma_multiply(0.55);
+        let title_color = if playable { theme::TEXT } else { dim };
+        let artist_color = if playable { theme::MUTED } else { dim };
+        let right_w = 52.0;
+        let spacing_x = row_ui.spacing().item_spacing.x;
+        let middle_w = (row_ui.available_width() - right_w - spacing_x).max(40.0);
+        row_ui.allocate_ui_with_layout(egui::vec2(middle_w, row_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(title_text).font(theme::semibold_font(14.0)).color(title_color)).selectable(false).truncate());
+            ui.add(egui::Label::new(egui::RichText::new(artist_text).size(12.0).color(artist_color)).selectable(false).truncate());
+        });
         row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(egui::RichText::new(dur).color(color)).selectable(false));
+            let time_color = if playable { theme::MUTED } else { dim };
+            ui.add(egui::Label::new(egui::RichText::new(dur).font(theme::mono_font(12.0)).color(time_color)).selectable(false));
         });
         if !action_clicked && resp.clicked() {
             self.selected_index = Some(i);
@@ -1769,38 +1785,68 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         }
     }
 
-    fn render_track_action(&mut self, ui: &mut egui::Ui, track: &Track, source: QueueSource, tid: &TrackId, row_resp: &egui::Response) -> bool {
+    fn render_track_action(&mut self, ui: &mut egui::Ui, track: &Track, source: QueueSource, tid: &TrackId, row_resp: &egui::Response, visible: bool) -> bool {
         match source {
-            QueueSource::MyMusic => self.render_delete_action(ui, track, tid, row_resp),
-            QueueSource::Playlist | QueueSource::Search | QueueSource::Recommendations => self.render_add_action(ui, track, tid),
+            QueueSource::MyMusic => self.render_delete_action(ui, track, tid, row_resp, visible),
+            QueueSource::Playlist | QueueSource::Search | QueueSource::Recommendations => self.render_add_action(ui, track, tid, visible),
         }
     }
 
-    fn render_add_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId) -> bool {
-        if self.track_is_mine(track) { return false; }
+    fn render_add_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId, visible: bool) -> bool {
+        if !visible || self.track_is_mine(track) { return false; }
         let state = self.add_states.get(tid).cloned().unwrap_or(AddState::Idle);
-        let (label, enabled) = match &state {
-            AddState::Idle => ("+".to_string(), true),
-            AddState::Running => ("...".to_string(), false),
-            AddState::Done => ("ok".to_string(), false),
-            AddState::Error(_) => ("+".to_string(), true),
-        };
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).small());
-        if let AddState::Error(msg) = &state {
-            resp.clone().on_hover_text(msg.clone());
+        match state {
+            AddState::Running => {
+                ui.add(egui::Label::new(egui::RichText::new("...").font(theme::mono_font(12.0)).color(theme::MUTED)).selectable(false));
+                false
+            }
+            AddState::Done => {
+                ui.add(egui::Label::new(egui::RichText::new("ok").font(theme::mono_font(12.0)).color(theme::ACCENT)).selectable(false));
+                false
+            }
+            AddState::Idle => {
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let color = if resp.hovered() { theme::ACCENT } else { theme::MUTED };
+                let center = rect.center();
+                let r = 5.0;
+                ui.painter().line_segment([center - egui::vec2(r, 0.0), center + egui::vec2(r, 0.0)], egui::Stroke::new(1.5, color));
+                ui.painter().line_segment([center - egui::vec2(0.0, r), center + egui::vec2(0.0, r)], egui::Stroke::new(1.5, color));
+                let resp = resp.on_hover_text(ADD_TRACK_TOOLTIP);
+                if resp.clicked() {
+                    self.start_add_track(track.clone());
+                    return true;
+                }
+                false
+            }
+            AddState::Error(msg) => {
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let color = if resp.hovered() { theme::ACCENT } else { theme::MUTED };
+                let center = rect.center();
+                let r = 5.0;
+                ui.painter().line_segment([center - egui::vec2(r, 0.0), center + egui::vec2(r, 0.0)], egui::Stroke::new(1.5, color));
+                ui.painter().line_segment([center - egui::vec2(0.0, r), center + egui::vec2(0.0, r)], egui::Stroke::new(1.5, color));
+                let resp = resp.on_hover_text(format!("{}\n{}", ADD_TRACK_TOOLTIP, msg));
+                if resp.clicked() {
+                    self.start_add_track(track.clone());
+                    return true;
+                }
+                false
+            }
         }
-        if resp.clicked() {
-            self.start_add_track(track.clone());
-            return true;
-        }
-        false
     }
 
-    fn render_delete_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId, row_resp: &egui::Response) -> bool {
+    fn render_delete_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId, row_resp: &egui::Response, visible: bool) -> bool {
         let state = self.delete_states.get(tid).cloned().unwrap_or(DeleteState::Idle);
         match state {
             DeleteState::Idle => {
-                let resp = ui.small_button("x");
+                if !visible { return false; }
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let color = if resp.hovered() { theme::WARN } else { theme::MUTED };
+                let center = rect.center();
+                let r = 5.0;
+                ui.painter().line_segment([center - egui::vec2(r, r), center + egui::vec2(r, r)], egui::Stroke::new(1.5, color));
+                ui.painter().line_segment([center + egui::vec2(-r, r), center + egui::vec2(r, -r)], egui::Stroke::new(1.5, color));
+                let resp = resp.on_hover_text(REMOVE_TRACK_TOOLTIP);
                 if resp.clicked() {
                     self.delete_states.insert(*tid, DeleteState::Confirm);
                     return true;
@@ -1808,14 +1854,16 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 false
             }
             DeleteState::Running => {
-                ui.add_enabled(false, egui::Button::new("...").small());
+                if visible {
+                    ui.add(egui::Label::new(egui::RichText::new("...").font(theme::mono_font(12.0)).color(theme::MUTED)).selectable(false));
+                }
                 false
             }
             DeleteState::Confirm => {
                 let mut clicked_any = false;
                 let yes = ui.small_button("\u{0414}\u{0430}");
                 let no = ui.small_button("\u{041D}\u{0435}\u{0442}");
-                ui.label("\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}?");
+                ui.add(egui::Label::new(egui::RichText::new(format!("{}?", REMOVE_TRACK_TOOLTIP)).font(theme::semibold_font(13.0))).selectable(false));
                 if yes.clicked() {
                     clicked_any = true;
                     self.start_delete_track(track.clone());
@@ -1827,7 +1875,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 if !clicked_any && row_resp.clicked() && !yes.hovered() && !no.hovered() {
                     self.delete_states.insert(*tid, DeleteState::Idle);
                 }
-                clicked_any || yes.clicked() || no.clicked()
+                clicked_any
             }
         }
     }
@@ -2056,7 +2104,7 @@ impl eframe::App for GuiAppImpl {
             });
             ui.separator();
 
-            let row_h = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(28.0);
+            let row_h = TRACK_ROW_HEIGHT;
             match self.active_tab {
                 Tab::MyMusic => {
                     if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }

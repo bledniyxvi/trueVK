@@ -16,6 +16,31 @@ pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x33, 0x55);
 pub const ACCENT_DIM: egui::Color32 = egui::Color32::from_rgb(0x5A, 0x16, 0x26);
 pub const WARN: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xB0, 0x20);
 
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+
+pub const SEMIBOLD_FAMILY: &str = "inter_semibold";
+pub const MONO_FAMILY: &str = "mono";
+
+pub fn semibold_font(size: f32) -> egui::FontId {
+    named_font(SEMIBOLD_FAMILY, size)
+}
+
+pub fn mono_font(size: f32) -> egui::FontId {
+    named_font(MONO_FAMILY, size)
+}
+
+fn named_font(name: &str, size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(Arc::from(name)))
+}
+
+fn insert_at(names: &mut Vec<String>, name: &str, index: usize) {
+    names.retain(|value| value != name);
+    let pos = index.min(names.len());
+    names.insert(pos, name.to_owned());
+}
+
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
     visuals.dark_mode = true;
@@ -64,6 +89,14 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Dark, visuals);
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.all_styles_mut(|style| {
+        style.text_styles = [
+            (egui::TextStyle::Small, egui::FontId::proportional(12.0)),
+            (egui::TextStyle::Body, egui::FontId::proportional(14.0)),
+            (egui::TextStyle::Button, egui::FontId::proportional(14.0)),
+            (egui::TextStyle::Heading, semibold_font(20.0)),
+            (egui::TextStyle::Monospace, egui::FontId::new(13.0, egui::FontFamily::Monospace)),
+        ]
+        .into();
         style.spacing.item_spacing = egui::vec2(10.0, 5.0);
         style.spacing.window_margin = egui::Margin::same(10);
         style.spacing.button_padding = egui::vec2(10.0, 4.0);
@@ -78,20 +111,41 @@ pub fn apply(ctx: &egui::Context) {
 
 pub fn font_definitions(cjk: Option<(Vec<u8>, u32)>) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert("InterRegular".to_owned(), Arc::new(egui::FontData::from_static(INTER_REGULAR)));
+    fonts.font_data.insert("InterSemiBold".to_owned(), Arc::new(egui::FontData::from_static(INTER_SEMIBOLD)));
+    fonts.font_data.insert("JetBrainsMono".to_owned(), Arc::new(egui::FontData::from_static(JETBRAINS_MONO)));
+    if let Some(names) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        insert_at(names, "InterRegular", 0);
+    }
+    if let Some(names) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        insert_at(names, "JetBrainsMono", 0);
+    }
+    fonts.families.insert(
+        egui::FontFamily::Name(Arc::from(SEMIBOLD_FAMILY)),
+        vec!["InterSemiBold".to_owned()],
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(Arc::from(MONO_FAMILY)),
+        vec!["JetBrainsMono".to_owned()],
+    );
     if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
         fonts.font_data.insert("SegoeUI".to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             if let Some(names) = fonts.families.get_mut(&family) {
-                names.retain(|name| name != "SegoeUI");
-                names.insert(0, "SegoeUI".to_owned());
+                insert_at(names, "SegoeUI", 1);
             }
         }
     }
     if let Some((bytes, index)) = cjk {
         fonts.font_data.insert("CJK".to_owned(), Arc::new(egui::FontData::from_blob(Arc::new(bytes), index)));
-        if let Some(names) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            names.retain(|name| name != "CJK");
-            names.push("CJK".to_owned());
+        for family in [
+            egui::FontFamily::Proportional,
+            egui::FontFamily::Name(Arc::from(SEMIBOLD_FAMILY)),
+        ] {
+            if let Some(names) = fonts.families.get_mut(&family) {
+                let pos = names.len();
+                insert_at(names, "CJK", pos);
+            }
         }
     }
     fonts
