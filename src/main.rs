@@ -1,7 +1,8 @@
 ﻿use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::env;
-use std::io::{BufRead, Read};
+use std::io::{BufRead, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,9 +53,13 @@ fn run() -> Result<()> {
         || play_index.is_some();
 
     if gui_mode || !cli_mode {
+        let single_instance = try_single_instance_gui()?;
+        if single_instance.is_none() {
+            return Ok(());
+        }
         let env_token = env::var("VK_TOKEN").ok().filter(|v| !v.trim().is_empty());
         let env_ua = env::var("VK_UA").ok().filter(|v| !v.trim().is_empty());
-        gui::run_gui(env_token, env_ua).map_err(|e| anyhow!("{}", e))?;
+        gui::run_gui(env_token, env_ua, single_instance).map_err(|e| anyhow!("{}", e))?;
         return Ok(());
     }
 
@@ -120,6 +125,21 @@ fn run() -> Result<()> {
     }
     print_tracks(count, &items);
     Ok(())
+}
+
+const SINGLE_INSTANCE_PORT: u16 = 47613;
+
+fn try_single_instance_gui() -> Result<Option<TcpListener>> {
+    match TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
+        Ok(listener) => Ok(Some(listener)),
+        Err(_) => {
+            if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
+                let _ = stream.write_all(b"show\n");
+                let _ = stream.flush();
+            }
+            Ok(None)
+        }
+    }
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {

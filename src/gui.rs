@@ -90,7 +90,7 @@ impl NowPlaying {
     }
 }
 
-pub fn run_gui(env_token: Option<String>, env_ua: Option<String>) -> eframe::Result<()> {
+pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instance_listener: Option<std::net::TcpListener>) -> eframe::Result<()> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PlayerCmd>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
     let (ui_evt_tx, ui_evt_rx) = std::sync::mpsc::channel::<UiEvent>();
@@ -111,11 +111,29 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>) -> eframe::Res
             let client_ua = ua.clone().unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
             let client = api::build_client(&client_ua).unwrap_or_else(|_| reqwest::blocking::Client::new());
             crate::player::spawn_player_worker(client, cmd_rx, evt_tx, ctx.clone());
-            Ok(Box::new(GuiAppImpl::new(
-                cmd_tx, evt_rx, ui_evt_tx, ui_evt_rx, token, ua, from_saved, ctx,
-            )))
+            let mut app = GuiAppImpl::new(
+                cmd_tx, evt_rx, ui_evt_tx.clone(), ui_evt_rx, token, ua, from_saved, ctx.clone(),
+            );
+            if let Some(listener) = single_instance_listener {
+                spawn_single_instance_listener(listener, ui_evt_tx, ctx);
+            }
+            Ok(Box::new(app))
         }),
     )
+}
+
+fn spawn_single_instance_listener(listener: std::net::TcpListener, ui_evt_tx: Sender<UiEvent>, ctx: egui::Context) {
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = [0u8; 64];
+            let n = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
+            let msg = String::from_utf8_lossy(&buf[..n]);
+            if msg.trim() == "show" {
+                let _ = ui_evt_tx.send(UiEvent::ShowWindow);
+                ctx.request_repaint();
+            }
+        }
+    });
 }
 
 fn resolve_startup_credentials(
@@ -156,6 +174,7 @@ enum UiEvent {
     MediaKey(MediaHotkey),
     TrayClick(MouseButton, MouseButtonState),
     TrayMenu(String),
+    ShowWindow,
     RestoredTrackResolved { track: Track },
     RestoredTrackUnavailable(String),
     LoadError(String),
@@ -242,6 +261,7 @@ struct GuiAppImpl {
     tray_menu_quit_id: String,
     window_hidden: bool,
     quit_requested: bool,
+    last_tray_tooltip: String,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -371,6 +391,7 @@ impl GuiAppImpl {
             tray_menu_quit_id: String::new(),
             window_hidden: false,
             quit_requested: false,
+            last_tray_tooltip: String::new(),
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -829,6 +850,22 @@ fn set_queue_for_my_music(&mut self) {
         self._hotkey_manager = Some(manager);
     }
 
+    fn sync_tray_tooltip(&mut self, tooltip: &str) {
+        if self.last_tray_tooltip == tooltip { return; }
+        if let Some(tray) = self._tray_icon.as_ref() {
+            let _ = tray.set_tooltip(Some(tooltip));
+            self.last_tray_tooltip = tooltip.to_string();
+        }
+    }
+
+    fn tray_tooltip_for_track(artist: &str, title: &str) -> String {
+        let mut s = format!("{} - {}", artist, title);
+        if s.chars().count() > 60 {
+            s = s.chars().take(60).collect();
+        }
+        s
+    }
+
     fn build_tray(&mut self) {
         let icon = match make_tray_icon() {
             Ok(i) => i,
@@ -1170,6 +1207,12 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
+                UiEvent::ShowWindow => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    self.window_hidden = false;
+                }
                 UiEvent::RestoredTrackResolved { track } => {
                     self.restored_track_pending = false;
                     self.status.clear();
@@ -1242,6 +1285,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.status = String::new();
                     self.seek_drag = None;
                     let track_id = self.pending_play_track_id.take();
+                    let tooltip = Self::tray_tooltip_for_track(&artist, &title);
                     if let Some(tid) = track_id {
                         let t = self.queue.iter().find(|t| TrackId::from_track(t) == tid).cloned()
                             .or_else(|| self.tracks.iter().find(|t| TrackId::from_track(t) == tid).cloned())
@@ -1254,18 +1298,24 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         artist, title, base_secs: 0.0, started_at: Some(Instant::now()), duration_secs, paused: false,
                         track_id,
                     });
-                }                PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
+                    self.sync_tray_tooltip(&tooltip);
+                }
+                PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
                     self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_id });
+                    self.sync_tray_tooltip("vkmusic");
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
+                    let tooltip = Self::tray_tooltip_for_track(&artist, &title);
                     self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: Some(Instant::now()), duration_secs, paused: false, track_id });
+                    self.sync_tray_tooltip(&tooltip);
                 }
                 PlayerEvent::Stopped => {
                     self.now_playing = None;
                     self.pending_play_track_id = None;
                     self.current_gen = 0;
+                    self.sync_tray_tooltip("vkmusic");
                 }
                 PlayerEvent::Ended { generation } => {
                     if generation == self.current_gen {
