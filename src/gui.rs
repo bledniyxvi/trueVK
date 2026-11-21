@@ -1,6 +1,7 @@
 use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
 use crate::player::{PlayerCmd, PlayerEvent};
 use crate::storage;
+use crate::theme;
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
 use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::{Menu, MenuEvent, MenuItem}};
@@ -154,14 +155,16 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instanc
     options.glow_options.vsync = true;
     options.viewport = options
         .viewport
-        .with_title("vkmusic")
-        .with_inner_size([520.0, 640.0])
-        .with_min_inner_size([400.0, 400.0]);
+        .with_title(theme::APP_NAME)
+        .with_inner_size([720.0, 640.0])
+        .with_min_inner_size([640.0, 480.0]);
     eframe::run_native(
-        "vkmusic",
+        theme::APP_NAME,
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
+            theme::apply(&ctx);
+            ctx.set_fonts(theme::font_definitions(None));
             let (token, ua, from_saved) = resolve_startup_credentials(env_token, env_ua);
             let client_ua = ua.clone().unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
             let client = api::build_client(&client_ua).unwrap_or_else(|_| reqwest::blocking::Client::new());
@@ -349,6 +352,7 @@ struct GuiAppImpl {
     shuffle_history: Vec<TrackId>,
     shuffle_rng: Xorshift64,
     shuffle_queue_key_state: Option<ShuffleQueueKey>,
+    cjk_font_loaded: bool,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -362,9 +366,9 @@ fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
             let dy = y as f32 + 0.5 - c;
             if dx * dx + dy * dy <= r * r {
                 let i = ((y * size + x) * 4) as usize;
-                rgba[i] = 0x4a;
-                rgba[i + 1] = 0x90;
-                rgba[i + 2] = 0xe2;
+                rgba[i] = theme::ACCENT.r();
+                rgba[i + 1] = theme::ACCENT.g();
+                rgba[i + 2] = theme::ACCENT.b();
                 rgba[i + 3] = 0xff;
             }
         }
@@ -490,6 +494,7 @@ impl GuiAppImpl {
             shuffle_history: Vec::new(),
             shuffle_rng: Xorshift64::from_time(),
             shuffle_queue_key_state: None,
+            cjk_font_loaded: false,
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -1701,6 +1706,16 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         }
     }
 
+    fn ensure_cjk_font(&mut self, ctx: &egui::Context, text: &str) {
+        if self.cjk_font_loaded || !theme::needs_cjk(text) {
+            return;
+        }
+        self.cjk_font_loaded = true;
+        if let Some(cjk) = theme::cjk_font_bytes() {
+            ctx.set_fonts(theme::font_definitions(Some(cjk)));
+        }
+    }
+
     fn render_track_row(&mut self, ui: &mut egui::Ui, i: usize, track: &Track, width: f32, row_h: f32, source: QueueSource, playing_in_this_list: bool) {
         let is_selected = self.selected_index == Some(i);
         let is_playing = playing_in_this_list;
@@ -1708,6 +1723,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let dur = track.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
         let idx_text = format!("{:>3}", i + 1);
         let title_text = format!("{} - {}", track.artist, track.title);
+        self.ensure_cjk_font(ui.ctx(), &title_text);
         let fill = if is_playing {
             Some(ui.visuals().selection.bg_fill)
         } else if is_selected {
@@ -1716,6 +1732,11 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             None
         };
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
+        let resp = if playable {
+            resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            resp
+        };
         if let Some(fill) = fill {
             ui.painter().rect_filled(rect, 0.0, fill);
         } else if resp.hovered() && playable {
@@ -1742,9 +1763,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         });
         if !action_clicked && resp.clicked() {
             self.selected_index = Some(i);
-        }
-        if !action_clicked && resp.double_clicked() && playable {
-            self.play_from_list(source, i);
+            if playable {
+                self.play_from_list(source, i);
+            }
         }
     }
 
@@ -1926,6 +1947,7 @@ impl eframe::App for GuiAppImpl {
             } else {
                 "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}".to_string()
             };
+            self.ensure_cjk_font(ui.ctx(), &now_text);
             ui.horizontal(|ui| {
                 let repeat_w = 110.0;
                 let shuffle_w = 130.0;
@@ -2007,6 +2029,8 @@ impl eframe::App for GuiAppImpl {
                 ui.add(egui::Label::new(&self.hotkey_status).selectable(false));
             }
             if !self.status.is_empty() {
+                let status = self.status.clone();
+                self.ensure_cjk_font(ui.ctx(), &status);
                 ui.add(egui::Label::new(&self.status).selectable(false));
             }
         });

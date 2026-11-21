@@ -13,6 +13,7 @@ mod api;
 mod gui;
 mod player;
 mod storage;
+mod theme;
 
 use api::{AudioGetResponse, PlaylistsGetResponse, Track};
 
