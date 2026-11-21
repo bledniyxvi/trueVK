@@ -58,12 +58,15 @@ const PANEL_RIGHT_W: f32 = 220.0;
 const PANEL_ZONE_GAP: f32 = 3.0;
 const LOGIN_OPEN_LABEL: &str = "\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}";
 const LOGIN_COPY_LABEL: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}";
-const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}\u{20}\u{441}\u{44e}\u{434}\u{430}";
+const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{438}\u{442}\u{44c}";
 const LOGIN_SUBMIT_LABEL: &str = "\u{412}\u{43e}\u{439}\u{442}\u{438}";
 const LOGIN_LINK_HINT: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}\u{20}\u{441}\u{44e}\u{434}\u{430}";
-const LOGIN_MORE_LABEL: &str = "\u{414}\u{43e}\u{43f}\u{43e}\u{43b}\u{43d}\u{438}\u{442}\u{435}\u{43b}\u{44c}\u{43d}\u{43e}";
+const LOGIN_REQUIRED_TEXT: &str = "\u{41d}\u{443}\u{436}\u{435}\u{43d}\u{20}\u{432}\u{445}\u{43e}\u{434}";
 const LOGIN_STEP_CIRCLE: f32 = 24.0;
 const LOGIN_STEP_GAP: f32 = 12.0;
+const LOGIN_STEP_ROW_GAP: f32 = 8.0;
+const LOGIN_PASTE_BUTTON_W: f32 = 96.0;
+const LOGIN_CARD_ESTIMATE_H: f32 = 520.0;
 const LOGIN_HEADING: &str = "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}\u{2e}\u{20}\u{414}\u{430}\u{432}\u{430}\u{439}\u{20}\u{43f}\u{43e}\u{434}\u{43a}\u{43b}\u{44e}\u{447}\u{438}\u{43c}\u{20}\u{442}\u{432}\u{43e}\u{439}\u{20}\u{56}\u{4b}\u{2e}";
 const LOGIN_SUBHEADING: &str = "\u{42d}\u{442}\u{43e}\u{20}\u{434}\u{435}\u{43b}\u{430}\u{435}\u{442}\u{441}\u{44f}\u{20}\u{43e}\u{434}\u{438}\u{43d}\u{20}\u{440}\u{430}\u{437}\u{2e}";
 const LOGIN_STEP_ONE: &str = "\u{41d}\u{430}\u{436}\u{43c}\u{438}\u{20}\u{ab}\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}\u{bb}\u{20}\u{438}\u{20}\u{432}\u{43e}\u{439}\u{434}\u{438}\u{20}\u{432}\u{20}\u{430}\u{43a}\u{43a}\u{430}\u{443}\u{43d}\u{442}\u{2e}";
@@ -444,22 +447,13 @@ fn draw_step_circle(ui: &mut egui::Ui, rect: egui::Rect, number: usize) {
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, number.to_string(), theme::mono_font(12.0), theme::ACCENT);
 }
 
-fn login_step_row(ui: &mut egui::Ui, number: usize, text: &str, text_w: f32) {
-    let row_w = LOGIN_STEP_CIRCLE + LOGIN_STEP_GAP + text_w;
-    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(row_w, 56.0), egui::Sense::hover());
-    let circle = egui::Rect::from_center_size(
-        egui::pos2(row_rect.min.x + LOGIN_STEP_CIRCLE * 0.5, row_rect.min.y + 14.0),
-        egui::vec2(LOGIN_STEP_CIRCLE, LOGIN_STEP_CIRCLE),
-    );
-    draw_step_circle(ui, circle, number);
-    let text_rect = egui::Rect::from_min_size(
-        egui::pos2(row_rect.min.x + LOGIN_STEP_CIRCLE + LOGIN_STEP_GAP, row_rect.min.y),
-        egui::vec2(text_w, row_rect.height()),
-    );
-    let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-    text_ui.set_width(text_w);
-    text_ui.set_min_height(row_rect.height());
-    text_ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT)).selectable(false).wrap());
+fn login_step_row(ui: &mut egui::Ui, number: usize, text: &str) {
+    ui.horizontal(|ui| {
+        let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(LOGIN_STEP_CIRCLE, LOGIN_STEP_CIRCLE), egui::Sense::hover());
+        draw_step_circle(ui, circle_rect, number);
+        ui.add_space(LOGIN_STEP_GAP);
+        ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT)).selectable(false).wrap());
+    });
 }
 
 fn styled_login_field(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, value: &mut String, hint: &'static str, password: bool) -> egui::Response {
@@ -468,14 +462,17 @@ fn styled_login_field(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, value: 
     let text_rect = rect.shrink2(egui::vec2(10.0, 0.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.set_min_height(rect.height());
-    let resp = child.add(
-        egui::TextEdit::singleline(value)
-            .id(id)
-            .frame(egui::Frame::NONE)
-            .desired_width(text_rect.width())
-            .hint_text(egui::RichText::new(hint).color(theme::MUTED))
-            .password(password),
-    );
+    let resp = child.scope(|ui| {
+        ui.visuals_mut().widgets.hovered.bg_stroke = egui::Stroke::NONE;
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .desired_width(text_rect.width())
+                .hint_text(egui::RichText::new(hint).color(theme::MUTED))
+                .password(password),
+        )
+    }).inner;
     let focused = resp.has_focus();
     ui.painter().rect_stroke(
         rect,
@@ -484,6 +481,41 @@ fn styled_login_field(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, value: 
         egui::StrokeKind::Middle,
     );
     resp
+}
+
+fn draw_playing_marker(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
+    let painter = ui.painter();
+    let center = rect.center();
+    if paused {
+        let bar_w = 3.0;
+        let bar_h = 14.0;
+        let gap = 6.0;
+        for dx in [-gap * 0.5, gap * 0.5] {
+            let bar = egui::Rect::from_center_size(
+                egui::pos2(center.x + dx, center.y),
+                egui::vec2(bar_w, bar_h),
+            );
+            painter.rect_filled(bar, egui::CornerRadius::same(1), theme::ACCENT_DIM);
+        }
+        return;
+    }
+    let bar_w = 3.0;
+    let gap = 4.0;
+    let heights = [9.0, 15.0, 11.0];
+    let total_w = heights.len() as f32 * bar_w + (heights.len() as f32 - 1.0) * gap;
+    let start_x = center.x - total_w * 0.5;
+    for (i, h) in heights.iter().enumerate() {
+        let bar = egui::Rect::from_center_size(
+            egui::pos2(start_x + bar_w * 0.5 + i as f32 * (bar_w + gap), center.y),
+            egui::vec2(bar_w, *h),
+        );
+        painter.rect_filled(bar, egui::CornerRadius::same(1), theme::ACCENT);
+    }
+}
+
+fn draw_hover_play_marker(ui: &egui::Ui, rect: egui::Rect) {
+    let tri = egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 12.0));
+    ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::MUTED));
 }
 
 fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: TransportIcon, enabled: bool, tooltip: &str) -> bool {
@@ -706,7 +738,6 @@ struct GuiAppImpl {
     ua: String,
     logged_in: bool,
     login_input: String,
-    ua_input: String,
     my_user_id: Option<i64>,
 
     tracks: Vec<Track>,
@@ -837,10 +868,9 @@ impl GuiAppImpl {
             ui_evt_tx,
             ui_evt_rx,
             token: token.unwrap_or_default(),
-            ua: ua_val.clone(),
+            ua: ua_val,
             logged_in,
             login_input: String::new(),
-            ua_input: ua_val,
             my_user_id: None,
 
             tracks: Vec::new(),
@@ -885,7 +915,7 @@ impl GuiAppImpl {
             queue_playlist: None,
             queue_search_query: None,
 
-            status: if logged_in { String::new() } else { "Login required".to_string() },
+            status: if logged_in { String::new() } else { LOGIN_REQUIRED_TEXT.to_string() },
             now_playing: None,
             volume,
             volume_before_mute: None,
@@ -1229,7 +1259,7 @@ impl GuiAppImpl {
         self.current_gen = 0;
         self.active_tab = Tab::MyMusic;
         let _ = self.cmd_tx.send(PlayerCmd::Stop);
-        self.status = message.unwrap_or_else(|| "Login required".to_string());
+        self.status = message.unwrap_or_else(|| LOGIN_REQUIRED_TEXT.to_string());
     }
 fn set_queue_for_my_music(&mut self) {
         self.queue = self.tracks.clone();
@@ -2129,23 +2159,20 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
     }
     fn login_now(&mut self) {
         if let Some(token) = api::extract_access_token(&self.login_input) {
-            let ua = self.ua_input.trim().to_string();
-            if ua.is_empty() {
-                self.status = "VK API error: missing User-Agent".to_string();
-            } else {
-                self.token = token;
-                self.ua = ua;
-                self.logged_in = true;
-                self.login_input.clear();
-                self.status.clear();
-                self.tracks.clear();
-                self.tracks_count = None;
-                self.next_offset = 0;
-                self.filter_autoload_stopped = false;
-                self.using_saved_credentials = false;
-                self.credentials_saved = false;
-                self.request_tracks_load();
+            if self.ua.trim().is_empty() {
+                self.ua = DEFAULT_ANDROID_UA.to_string();
             }
+            self.token = token;
+            self.logged_in = true;
+            self.login_input.clear();
+            self.status.clear();
+            self.tracks.clear();
+            self.tracks_count = None;
+            self.next_offset = 0;
+            self.filter_autoload_stopped = false;
+            self.using_saved_credentials = false;
+            self.credentials_saved = false;
+            self.request_tracks_load();
         } else {
             self.status = "VK API error: access_token not found".to_string();
         }
@@ -2155,10 +2182,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let available = ui.available_rect_before_wrap();
         let card_w = 480.0f32.min(available.width() - 48.0).max(280.0);
         let inner_w = (card_w - 48.0).max(1.0);
-        let step_text_w = (inner_w - LOGIN_STEP_CIRCLE - LOGIN_STEP_GAP).max(1.0);
-        let top_gap = ((available.height() - 660.0) * 0.5).max(0.0);
+        let top_gap = ((available.height() - LOGIN_CARD_ESTIMATE_H) * 0.5).max(0.0);
 
-        egui::ScrollArea::vertical().hscroll(true).show(ui, |ui| {
+        egui::ScrollArea::vertical().hscroll(false).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.set_width(card_w);
                 ui.add_space(top_gap);
@@ -2166,7 +2192,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     .fill(theme::SURFACE)
                     .stroke(egui::Stroke::new(1.0, theme::BORDER))
                     .corner_radius(egui::CornerRadius::same(12))
-                    .inner_margin(egui::Margin::same(24))
+                    .inner_margin(egui::Margin::symmetric(24, 18))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.set_width(inner_w);
@@ -2184,7 +2210,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                                     theme::TEXT,
                                 );
                             });
-                            ui.add_space(16.0);
+                            ui.add_space(14.0);
 
                             ui.add(egui::Label::new(
                                 egui::RichText::new(LOGIN_HEADING).font(theme::semibold_font(22.0)).color(theme::TEXT),
@@ -2193,11 +2219,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                             ui.add(egui::Label::new(
                                 egui::RichText::new(LOGIN_SUBHEADING).size(12.0).color(theme::MUTED),
                             ).selectable(false).wrap());
-                            ui.add_space(16.0);
+                            ui.add_space(12.0);
 
-                            login_step_row(ui, 1, LOGIN_STEP_ONE, step_text_w);
-                            login_step_row(ui, 2, LOGIN_STEP_TWO, step_text_w);
-                            login_step_row(ui, 3, LOGIN_STEP_THREE, step_text_w);
+                            login_step_row(ui, 1, LOGIN_STEP_ONE);
+                            ui.add_space(LOGIN_STEP_ROW_GAP);
+                            login_step_row(ui, 2, LOGIN_STEP_TWO);
+                            ui.add_space(LOGIN_STEP_ROW_GAP);
+                            login_step_row(ui, 3, LOGIN_STEP_THREE);
                             ui.add_space(10.0);
 
                             let button_gap = 10.0;
@@ -2220,21 +2248,27 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                                 }
                             });
 
-                            ui.add_space(12.0);
-                            let (link_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
-                            let link_resp = styled_login_field(
-                                ui,
-                                link_rect,
-                                ui.scope_id().with("login.link"),
-                                &mut self.login_input,
-                                LOGIN_LINK_HINT,
-                                true,
-                            );
-                            let submit_on_enter = link_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-
-                            ui.add_space(8.0);
-                            let (paste_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
-                            if ghost_pill_button(ui, paste_rect, "login.paste", LOGIN_PASTE_LABEL) {
+                            ui.add_space(10.0);
+                            let paste_w = LOGIN_PASTE_BUTTON_W.min(inner_w);
+                            let link_w = (inner_w - paste_w - 8.0).max(1.0);
+                            let mut submit_on_enter = false;
+                            let mut paste_clicked = false;
+                            ui.horizontal(|ui| {
+                                let (link_rect, _) = ui.allocate_exact_size(egui::vec2(link_w, 34.0), egui::Sense::hover());
+                                let link_resp = styled_login_field(
+                                    ui,
+                                    link_rect,
+                                    ui.scope_id().with("login.link"),
+                                    &mut self.login_input,
+                                    LOGIN_LINK_HINT,
+                                    true,
+                                );
+                                submit_on_enter = link_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                ui.add_space(8.0);
+                                let (paste_rect, _) = ui.allocate_exact_size(egui::vec2(paste_w, 34.0), egui::Sense::hover());
+                                paste_clicked = ghost_pill_button(ui, paste_rect, "login.paste", LOGIN_PASTE_LABEL);
+                            });
+                            if paste_clicked {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                             }
 
@@ -2245,25 +2279,11 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                                 self.login_now();
                             }
 
-                            ui.add_space(12.0);
-                            ui.collapsing(LOGIN_MORE_LABEL, |ui| {
-                                ui.add(egui::Label::new("User-Agent:").selectable(false));
-                                let (ua_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 30.0), egui::Sense::hover());
-                                styled_login_field(
-                                    ui,
-                                    ua_rect,
-                                    ui.scope_id().with("login.ua"),
-                                    &mut self.ua_input,
-                                    "",
-                                    false,
-                                );
-                            });
-
-                            ui.add_space(14.0);
+                            ui.add_space(10.0);
                             ui.add(egui::Label::new(
                                 egui::RichText::new(LOGIN_PRIVACY).size(11.0).color(theme::MUTED),
                             ).selectable(false).wrap());
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                             ui.add(egui::Label::new(
                                 egui::RichText::new(LOGIN_DISCLAIMER).size(11.0).color(theme::MUTED),
                             ).selectable(false).wrap());
@@ -2309,6 +2329,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
 
     fn render_track_row(&mut self, ui: &mut egui::Ui, i: usize, track: &Track, width: f32, row_h: f32, source: QueueSource, playing_in_this_list: bool) {
         let is_playing = playing_in_this_list;
+        let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
         let playable = track.is_playable();
         let dur = track.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
         let idx_text = format!("{:>2}", i + 1);
@@ -2357,8 +2378,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         left_ui.set_min_height(row_h);
         if is_playing {
-            let tri = egui::Rect::from_center_size(left_rect.center(), egui::vec2(10.0, 12.0));
-            ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::ACCENT));
+            draw_playing_marker(ui, left_rect, paused);
+        } else if row_hovered {
+            draw_hover_play_marker(ui, left_rect);
         } else {
             left_ui.add(egui::Label::new(egui::RichText::new(idx_text).font(theme::mono_font(13.0)).color(theme::MUTED)).selectable(false));
         }
