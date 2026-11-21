@@ -2,7 +2,7 @@
 use crate::player::{PlayerCmd, PlayerEvent};
 use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct NowPlaying {
     artist: String,
@@ -57,6 +57,9 @@ struct GuiAppImpl {
     seek_drag: Option<u64>,
     pending_play_index: Option<usize>,
     current_gen: u64,
+    fps_enabled: bool,
+    fps_frames: u64,
+    fps_last: Instant,
     egui_ctx: egui::Context,
 }
 
@@ -93,6 +96,9 @@ impl GuiAppImpl {
             seek_drag: None,
             pending_play_index: None,
             current_gen: 0,
+            fps_enabled: std::env::var_os("VKMUSIC_FPS").as_deref() == Some(std::ffi::OsStr::new("1")),
+            fps_frames: 0,
+            fps_last: Instant::now(),
             egui_ctx,
         };
         if app.logged_in {
@@ -275,6 +281,15 @@ impl eframe::App for GuiAppImpl {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_events(&ctx);
+        if self.fps_enabled {
+            self.fps_frames += 1;
+            let elapsed = self.fps_last.elapsed();
+            if elapsed >= Duration::from_secs(10) {
+                eprintln!("frames in last 10s: {}", self.fps_frames);
+                self.fps_frames = 0;
+                self.fps_last = Instant::now();
+            }
+        }
 
         egui::Panel::bottom("bottom").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
