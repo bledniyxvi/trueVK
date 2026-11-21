@@ -43,6 +43,9 @@ pub fn is_auth_error(err: &anyhow::Error) -> bool {
 
 #[derive(Clone, Debug)]
 pub struct Track {
+    pub owner_id: i64,
+    pub id: i64,
+    pub access_key: Option<String>,
     pub artist: String,
     pub title: String,
     pub duration_secs: Option<u64>,
@@ -52,7 +55,14 @@ pub struct Track {
 
 impl Track {
     pub fn from_value(item: &Value) -> Self {
+        let access_key = match item.get("access_key") {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        };
         Self {
+            owner_id: item.get("owner_id").and_then(Value::as_i64).unwrap_or(0),
+            id: item.get("id").and_then(Value::as_i64).unwrap_or(0),
+            access_key,
             artist: string_field(item, "artist"),
             title: string_field(item, "title"),
             duration_secs: duration_secs(item, "duration"),
@@ -71,6 +81,10 @@ impl Track {
 
     pub fn is_playable(&self) -> bool {
         self.url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+    }
+
+    pub fn identity(&self) -> (i64, i64) {
+        (self.owner_id, self.id)
     }
 }
 

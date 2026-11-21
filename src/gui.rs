@@ -19,6 +19,33 @@ enum QueueSource {
     Search,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+struct TrackId {
+    owner_id: i64,
+    id: i64,
+}
+
+impl TrackId {
+    fn from_track(t: &Track) -> Self {
+        Self { owner_id: t.owner_id, id: t.id }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum AddState {
+    Idle,
+    Running,
+    Done,
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
+enum DeleteState {
+    Idle,
+    Confirm,
+    Running,
+}
+
 #[derive(Clone, Debug)]
 struct PlaylistView {
     owner_id: i64,
@@ -41,7 +68,7 @@ struct NowPlaying {
     started_at: Option<Instant>,
     duration_secs: Option<u64>,
     paused: bool,
-    queue_index: Option<usize>,
+    track_id: Option<TrackId>,
 }
 
 impl NowPlaying {
@@ -108,6 +135,10 @@ enum UiEvent {
     PlaylistsLoaded { offset: usize, count: Option<u64>, items: Vec<PlaylistView> },
     PlaylistTracksLoaded { playlist_id: i64, owner_id: i64, offset: usize, count: Option<u64>, items: Vec<Track> },
     SearchLoaded { query: String, request_id: u64, offset: usize, count: Option<u64>, items: Vec<Track> },
+    AddDone { track_id: TrackId },
+    AddError { track_id: TrackId, msg: String },
+    DeleteDone { track_id: TrackId },
+    DeleteError { track_id: TrackId, msg: String },
     LoadError(String),
 }
 
@@ -121,6 +152,7 @@ struct GuiAppImpl {
     logged_in: bool,
     login_input: String,
     ua_input: String,
+    my_user_id: Option<i64>,
 
     tracks: Vec<Track>,
     tracks_count: Option<u64>,
@@ -158,10 +190,12 @@ struct GuiAppImpl {
     now_playing: Option<NowPlaying>,
     volume: f32,
     seek_drag: Option<u64>,
-    pending_play_queue_index: Option<usize>,
+    pending_play_track_id: Option<TrackId>,
     selected_index: Option<usize>,
     active_tab: Tab,
     current_gen: u64,
+    add_states: std::collections::HashMap<TrackId, AddState>,
+    delete_states: std::collections::HashMap<TrackId, DeleteState>,
     fps_enabled: bool,
     fps_passes: u64,
     fps_frames: u64,
@@ -197,6 +231,7 @@ impl GuiAppImpl {
             logged_in,
             login_input: String::new(),
             ua_input: ua_val,
+            my_user_id: None,
 
             tracks: Vec::new(),
             tracks_count: None,
@@ -234,10 +269,12 @@ impl GuiAppImpl {
             now_playing: None,
             volume,
             seek_drag: None,
-            pending_play_queue_index: None,
+            pending_play_track_id: None,
             selected_index: None,
             active_tab: Tab::MyMusic,
             current_gen: 0,
+            add_states: std::collections::HashMap::new(),
+            delete_states: std::collections::HashMap::new(),
             fps_enabled: std::env::var_os("VKMUSIC_FPS").as_deref() == Some(std::ffi::OsStr::new("1")),
             fps_passes: 0,
             fps_frames: 0,
@@ -445,6 +482,7 @@ impl GuiAppImpl {
         self.logged_in = false;
         self.using_saved_credentials = false;
         self.credentials_saved = false;
+        self.my_user_id = None;
 
         self.tracks.clear(); self.tracks_count = None; self.loading_tracks = false; self.next_offset = 0; self.my_status.clear();
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
@@ -452,9 +490,11 @@ impl GuiAppImpl {
         self.search_query.clear(); self.search_input.clear(); self.search_tracks.clear(); self.search_count = None; self.loading_search = false; self.search_offset = 0; self.search_status.clear(); self.search_request_id = 0;
 
         self.queue.clear(); self.queue_source = QueueSource::MyMusic; self.queue_playlist = None; self.queue_search_query = None;
+        self.add_states.clear();
+        self.delete_states.clear();
 
         self.now_playing = None;
-        self.pending_play_queue_index = None;
+        self.pending_play_track_id = None;
         self.selected_index = None;
         self.seek_drag = None;
         self.current_gen = 0;
@@ -492,34 +532,35 @@ impl GuiAppImpl {
             QueueSource::Playlist => self.playlist_tracks.clone(),
             QueueSource::Search => self.search_tracks.clone(),
         };
-        if index >= tracks.len() { return; }
-        if !tracks[index].is_playable() { return; }
+        let Some(track) = tracks.get(index).cloned() else { return; };
+        if !track.is_playable() { return; }
         match source {
             QueueSource::MyMusic => self.set_queue_for_my_music(),
             QueueSource::Playlist => self.set_queue_for_playlist(),
             QueueSource::Search => self.set_queue_for_search(),
         }
         self.selected_index = Some(index);
-        self.pending_play_queue_index = Some(index);
-        let track = self.queue[index].clone();
+        let tid = TrackId::from_track(&track);
+        self.pending_play_track_id = Some(tid);
         let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
     }
 
-    fn play_queue_index(&mut self, index: usize) {
-        if index >= self.queue.len() { return; }
-        if !self.queue[index].is_playable() { return; }
-        self.pending_play_queue_index = Some(index);
-        let track = self.queue[index].clone();
+    fn play_track_id(&mut self, track_id: TrackId) {
+        let Some(pos) = self.queue.iter().position(|t| TrackId::from_track(t) == track_id) else { return; };
+        let track = self.queue[pos].clone();
+        if !track.is_playable() { return; }
+        self.pending_play_track_id = Some(track_id);
         let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
     }
 
-    fn find_next_playable(&self, from: usize, dir: i32) -> Option<usize> {
+    fn find_next_playable_id(&self, from: TrackId, dir: i32) -> Option<TrackId> {
         if self.queue.is_empty() { return None; }
-        let mut i = from as i32 + dir;
+        let Some(pos) = self.queue.iter().position(|t| TrackId::from_track(t) == from) else { return None; };
+        let mut i = pos as i32 + dir;
         while i >= 0 && (i as usize) < self.queue.len() {
             let idx = i as usize;
             if self.queue[idx].is_playable() {
-                return Some(idx);
+                return Some(TrackId::from_track(&self.queue[idx]));
             }
             i += dir;
         }
@@ -527,20 +568,18 @@ impl GuiAppImpl {
     }
 
     fn play_next(&mut self) {
-        if let Some(idx) = self.now_playing.as_ref().and_then(|np| np.queue_index) {
-            if let Some(next) = self.find_next_playable(idx, 1) {
-                self.play_queue_index(next);
-            } else {
-                self.now_playing = None;
-            }
+        let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
+        if let Some(next) = self.find_next_playable_id(cur, 1) {
+            self.play_track_id(next);
+        } else {
+            self.now_playing = None;
         }
     }
 
     fn play_prev(&mut self) {
-        if let Some(idx) = self.now_playing.as_ref().and_then(|np| np.queue_index) {
-            if let Some(prev) = self.find_next_playable(idx, -1) {
-                self.play_queue_index(prev);
-            }
+        let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
+        if let Some(prev) = self.find_next_playable_id(cur, -1) {
+            self.play_track_id(prev);
         }
     }
 
@@ -548,7 +587,9 @@ impl GuiAppImpl {
         match self.active_tab {
             Tab::MyMusic => {
                 let idx = self.selected_index.or_else(|| {
-                    if self.queue_source == QueueSource::MyMusic { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None }
+                    if self.queue_source == QueueSource::MyMusic {
+                        self.now_playing.as_ref().and_then(|np| np.track_id).and_then(|tid| self.tracks.iter().position(|t| TrackId::from_track(t) == tid))
+                    } else { None }
                 })?;
                 Some((QueueSource::MyMusic, idx))
             }
@@ -556,7 +597,7 @@ impl GuiAppImpl {
                 if self.selected_playlist.is_some() {
                     let idx = self.selected_index.or_else(|| {
                         let is_current = self.queue_source == QueueSource::Playlist && self.queue_playlist == self.selected_playlist.as_ref().map(|i| { let p=&self.playlists[*i]; (p.owner_id,p.id) });
-                        if is_current { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None }
+                        if is_current { self.now_playing.as_ref().and_then(|np| np.track_id).and_then(|tid| self.playlist_tracks.iter().position(|t| TrackId::from_track(t) == tid)) } else { None }
                     })?;
                     Some((QueueSource::Playlist, idx))
                 } else {
@@ -566,7 +607,7 @@ impl GuiAppImpl {
             Tab::Search => {
                 let idx = self.selected_index.or_else(|| {
                     let is_current = self.queue_source == QueueSource::Search && self.queue_search_query.as_deref() == Some(self.search_query.as_str());
-                    if is_current { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None }
+                    if is_current { self.now_playing.as_ref().and_then(|np| np.track_id).and_then(|tid| self.search_tracks.iter().position(|t| TrackId::from_track(t) == tid)) } else { None }
                 })?;
                 Some((QueueSource::Search, idx))
             }
@@ -595,6 +636,57 @@ impl GuiAppImpl {
         if pause_resume { let _ = self.cmd_tx.send(PlayerCmd::PauseResume); }
         if next { self.play_next(); }
         if prev { self.play_prev(); }
+    }
+
+    fn refresh_my_music_after_add(&mut self) {
+        self.tracks.clear();
+        self.tracks_count = None;
+        self.next_offset = 0;
+        self.loading_tracks = false;
+        self.request_tracks_load();
+    }
+
+    fn remove_track_locally(&mut self, track_id: TrackId) {
+        self.tracks.retain(|t| TrackId::from_track(t) != track_id);
+        if let Some(c) = self.tracks_count.as_mut() {
+            *c = c.saturating_sub(1);
+        }
+        if self.queue_source == QueueSource::MyMusic {
+            self.queue.retain(|t| TrackId::from_track(t) != track_id);
+        }
+        if let Some(sel) = self.selected_index {
+            if sel >= self.tracks.len() {
+                self.selected_index = if self.tracks.is_empty() { None } else { Some(self.tracks.len() - 1) };
+            }
+        }
+    }
+
+    fn track_is_mine(&self, track: &Track) -> bool {
+        self.my_user_id.map(|id| track.owner_id == id).unwrap_or(false)
+    }
+
+    fn ensure_my_user_id(&mut self) {
+        if self.my_user_id.is_some() || !self.logged_in { return; }
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<i64> {
+                let client = api::build_client(&ua)?;
+                let users: Vec<serde_json::Value> = api::vk_call(&client, &token, "users.get", &[])?;
+                let user = users.first().ok_or_else(|| anyhow::anyhow!("users.get returned no user"))?;
+                user.get("id").and_then(serde_json::Value::as_i64).ok_or_else(|| anyhow::anyhow!("users.get missing id"))
+            })();
+            if let Err(e) = res {
+                let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}"))));
+            } else if let Ok(id) = res {
+                // send via LoadError? no; use a dedicated event - simpler: piggyback by setting in ui thread via event not available.
+                // We'll handle by storing in status-less event; easiest is to add UiEvent::MyUserId, but to keep small, reuse LoadError impossible.
+                let _ = tx.send(UiEvent::LoadError(format!("__MY_USER_ID__:{id}")));
+            }
+            ctx.request_repaint();
+        });
     }
     fn handle_events(&mut self, ctx: &egui::Context) {
         while let Ok(evt) = self.ui_evt_rx.try_recv() {
@@ -650,7 +742,38 @@ impl GuiAppImpl {
                         }
                     }
                 }
+                UiEvent::AddDone { track_id } => {
+                    self.add_states.insert(track_id, AddState::Done);
+                    self.refresh_my_music_after_add();
+                }
+                UiEvent::AddError { track_id, msg } => {
+                    if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
+                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else {
+                        self.add_states.insert(track_id, AddState::Error(msg.clone()));
+                        self.status = msg;
+                    }
+                }
+                UiEvent::DeleteDone { track_id } => {
+                    self.delete_states.remove(&track_id);
+                    self.remove_track_locally(track_id);
+                    self.add_states.remove(&track_id);
+                }
+                UiEvent::DeleteError { track_id, msg } => {
+                    self.delete_states.insert(track_id, DeleteState::Idle);
+                    if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
+                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else {
+                        self.status = msg;
+                    }
+                }
                 UiEvent::LoadError(msg) => {
+                    if let Some(id_s) = msg.strip_prefix("__MY_USER_ID__:") {
+                        if let Ok(id) = id_s.parse::<i64>() {
+                            self.my_user_id = Some(id);
+                        }
+                        continue;
+                    }
                     self.loading_tracks = false;
                     self.loading_playlists = false;
                     self.loading_playlist_tracks = false;
@@ -680,20 +803,20 @@ impl GuiAppImpl {
                     self.seek_drag = None;
                     self.now_playing = Some(NowPlaying {
                         artist, title, base_secs: 0.0, started_at: Some(Instant::now()), duration_secs, paused: false,
-                        queue_index: self.pending_play_queue_index.take(),
+                        track_id: self.pending_play_track_id.take(),
                     });
                 }
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
-                    let queue_index = self.now_playing.as_ref().and_then(|np| np.queue_index).or(self.pending_play_queue_index);
-                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, queue_index });
+                    let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
+                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_id });
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
-                    let queue_index = self.now_playing.as_ref().and_then(|np| np.queue_index).or(self.pending_play_queue_index);
-                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: Some(Instant::now()), duration_secs, paused: false, queue_index });
+                    let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
+                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: Some(Instant::now()), duration_secs, paused: false, track_id });
                 }
                 PlayerEvent::Stopped => {
                     self.now_playing = None;
-                    self.pending_play_queue_index = None;
+                    self.pending_play_track_id = None;
                     self.current_gen = 0;
                 }
                 PlayerEvent::Ended { generation } => {
@@ -710,7 +833,7 @@ impl GuiAppImpl {
                 }
                 PlayerEvent::Volume(vol) => { self.volume = vol.clamp(0.0, 1.0); }
                 PlayerEvent::Error(msg) => {
-                    self.pending_play_queue_index = None;
+                    self.pending_play_track_id = None;
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
@@ -786,18 +909,147 @@ impl GuiAppImpl {
         let color = if playable { normal } else { muted };
         row_ui.add(egui::Label::new(egui::RichText::new(idx_text).monospace().color(color)).selectable(false));
         row_ui.add_space(8.0);
+
+        let tid = TrackId::from_track(track);
+        let action_clicked = self.render_track_action(&mut row_ui, track, source, &tid, &resp);
+
+        row_ui.add_space(6.0);
         let mut title_rt = egui::RichText::new(title_text).color(color);
         if is_playing { title_rt = title_rt.strong(); }
         row_ui.add(egui::Label::new(title_rt).selectable(false).truncate());
         row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(egui::Label::new(egui::RichText::new(dur).color(color)).selectable(false));
         });
-        if resp.clicked() {
+        if !action_clicked && resp.clicked() {
             self.selected_index = Some(i);
         }
-        if resp.double_clicked() && playable {
+        if !action_clicked && resp.double_clicked() && playable {
             self.play_from_list(source, i);
         }
+    }
+
+    fn render_track_action(&mut self, ui: &mut egui::Ui, track: &Track, source: QueueSource, tid: &TrackId, row_resp: &egui::Response) -> bool {
+        match source {
+            QueueSource::MyMusic => self.render_delete_action(ui, track, tid, row_resp),
+            QueueSource::Playlist | QueueSource::Search => self.render_add_action(ui, track, tid),
+        }
+    }
+
+    fn render_add_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId) -> bool {
+        if self.track_is_mine(track) { return false; }
+        let state = self.add_states.get(tid).cloned().unwrap_or(AddState::Idle);
+        let (label, enabled) = match &state {
+            AddState::Idle => ("+".to_string(), true),
+            AddState::Running => ("...".to_string(), false),
+            AddState::Done => ("ok".to_string(), false),
+            AddState::Error(_) => ("+".to_string(), true),
+        };
+        let resp = ui.add_enabled(enabled, egui::Button::new(label).small());
+        if let AddState::Error(msg) = &state {
+            resp.clone().on_hover_text(msg.clone());
+        }
+        if resp.clicked() {
+            self.start_add_track(track.clone());
+            return true;
+        }
+        false
+    }
+
+    fn render_delete_action(&mut self, ui: &mut egui::Ui, track: &Track, tid: &TrackId, row_resp: &egui::Response) -> bool {
+        let state = self.delete_states.get(tid).cloned().unwrap_or(DeleteState::Idle);
+        match state {
+            DeleteState::Idle => {
+                let resp = ui.small_button("x");
+                if resp.clicked() {
+                    self.delete_states.insert(*tid, DeleteState::Confirm);
+                    return true;
+                }
+                false
+            }
+            DeleteState::Running => {
+                ui.add_enabled(false, egui::Button::new("...").small());
+                false
+            }
+            DeleteState::Confirm => {
+                let mut clicked_any = false;
+                let yes = ui.small_button("Да");
+                let no = ui.small_button("Нет");
+                ui.label("Удалить?");
+                if yes.clicked() {
+                    clicked_any = true;
+                    self.start_delete_track(track.clone());
+                }
+                if no.clicked() {
+                    clicked_any = true;
+                    self.delete_states.insert(*tid, DeleteState::Idle);
+                }
+                if !clicked_any && row_resp.clicked() && !yes.hovered() && !no.hovered() {
+                    self.delete_states.insert(*tid, DeleteState::Idle);
+                }
+                clicked_any || yes.clicked() || no.clicked()
+            }
+        }
+    }
+
+    fn start_add_track(&mut self, track: Track) {
+        let tid = TrackId::from_track(&track);
+        self.add_states.insert(tid, AddState::Running);
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<()> {
+                let client = api::build_client(&ua)?;
+                let owner_s = track.owner_id.to_string();
+                let audio_s = track.id.to_string();
+                let mut params: Vec<(&str, &str)> = vec![("owner_id", owner_s.as_str()), ("audio_id", audio_s.as_str())];
+                let ak = track.access_key.clone();
+                if let Some(ak) = ak.as_deref() {
+                    params.push(("access_key", ak));
+                }
+                let result: serde_json::Value = api::vk_call(&client, &token, "audio.add", &params)?;
+                // VK may return audio_id or 0/response; treat any non-error as success
+                let _ = result;
+                Ok(())
+            })();
+            match res {
+                Ok(()) => { let _ = tx.send(UiEvent::AddDone { track_id: tid }); }
+                Err(e) => {
+                    let msg = api::sanitize_output(&format!("{e:#}"));
+                    if msg.contains("already") || msg.contains("Audio already added") || msg.contains("already added") {
+                        let _ = tx.send(UiEvent::AddDone { track_id: tid });
+                    } else {
+                        let _ = tx.send(UiEvent::AddError { track_id: tid, msg });
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn start_delete_track(&mut self, track: Track) {
+        let tid = TrackId::from_track(&track);
+        self.delete_states.insert(tid, DeleteState::Running);
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<()> {
+                let client = api::build_client(&ua)?;
+                let owner_s = track.owner_id.to_string();
+                let audio_s = track.id.to_string();
+                let params: Vec<(&str, &str)> = vec![("owner_id", owner_s.as_str()), ("audio_id", audio_s.as_str())];
+                let _: serde_json::Value = api::vk_call(&client, &token, "audio.delete", &params)?;
+                Ok(())
+            })();
+            match res {
+                Ok(()) => { let _ = tx.send(UiEvent::DeleteDone { track_id: tid }); }
+                Err(e) => { let _ = tx.send(UiEvent::DeleteError { track_id: tid, msg: api::sanitize_output(&format!("{e:#}")) }); }
+            }
+            ctx.request_repaint();
+        });
     }
 
     fn current_playing_matches(&self, source: QueueSource) -> bool {
@@ -902,6 +1154,8 @@ impl eframe::App for GuiAppImpl {
                 return;
             }
 
+            self.ensure_my_user_id();
+
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "Моя музыка");
                 ui.selectable_value(&mut self.active_tab, Tab::Playlists, "Плейлисты");
@@ -919,7 +1173,7 @@ impl eframe::App for GuiAppImpl {
                 Tab::MyMusic => {
                     if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }
                     let total = self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize;
-                    let playing_idx = if self.current_playing_matches(QueueSource::MyMusic) { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None };
+                    let playing_tid = if self.current_playing_matches(QueueSource::MyMusic) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                         let width = ui.available_width();
                         for i in range.clone() {
@@ -929,7 +1183,7 @@ impl eframe::App for GuiAppImpl {
                                 continue;
                             }
                             let track = self.tracks[i].clone();
-                            let playing_here = playing_idx == Some(i);
+                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
                             self.render_track_row(ui, i, &track, width, row_h, QueueSource::MyMusic, playing_here);
                         }
                         if range.end + 10 >= self.tracks.len() && !self.loading_tracks { self.request_tracks_load(); }
@@ -949,7 +1203,7 @@ impl eframe::App for GuiAppImpl {
                         if self.selected_playlist.is_some() {
                             if !self.playlist_status.is_empty() { ui.add(egui::Label::new(&self.playlist_status).selectable(false)); }
                             let total = self.playlist_tracks_count.unwrap_or(self.playlist_tracks.len() as u64) as usize;
-                            let playing_idx = if self.current_playing_matches(QueueSource::Playlist) { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None };
+                            let playing_tid = if self.current_playing_matches(QueueSource::Playlist) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
                             egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                                 let width = ui.available_width();
                                 for i in range.clone() {
@@ -959,7 +1213,7 @@ impl eframe::App for GuiAppImpl {
                                         continue;
                                     }
                                     let track = self.playlist_tracks[i].clone();
-                                    let playing_here = playing_idx == Some(i);
+                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
                                     self.render_track_row(ui, i, &track, width, row_h, QueueSource::Playlist, playing_here);
                                 }
                                 if range.end + 10 >= self.playlist_tracks.len() && !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
@@ -1003,7 +1257,7 @@ impl eframe::App for GuiAppImpl {
                     });
                     if !self.search_status.is_empty() { ui.add(egui::Label::new(&self.search_status).selectable(false)); }
                     let total = self.search_count.unwrap_or(self.search_tracks.len() as u64) as usize;
-                    let playing_idx = if self.current_playing_matches(QueueSource::Search) { self.now_playing.as_ref().and_then(|np| np.queue_index) } else { None };
+                    let playing_tid = if self.current_playing_matches(QueueSource::Search) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                         let width = ui.available_width();
                         for i in range.clone() {
@@ -1013,7 +1267,7 @@ impl eframe::App for GuiAppImpl {
                                 continue;
                             }
                             let track = self.search_tracks[i].clone();
-                            let playing_here = playing_idx == Some(i);
+                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
                             self.render_track_row(ui, i, &track, width, row_h, QueueSource::Search, playing_here);
                         }
                         if range.end + 10 >= self.search_tracks.len() && !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
