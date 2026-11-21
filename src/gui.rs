@@ -2197,14 +2197,17 @@ impl eframe::App for GuiAppImpl {
                 if seek_active {
                     seek_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
                 }
-                if has_duration && (seek_resp.clicked() || seek_resp.dragged()) {
+                let seek_clicked = has_duration && seek_resp.clicked();
+                let seek_dragged = has_duration && seek_resp.dragged();
+                if seek_clicked || seek_dragged {
                     if let Some(pointer) = seek_resp.interact_pointer_pos() {
                         let t = ((pointer.x - progress_rect.min.x) / progress_rect.width()).clamp(0.0, 1.0);
                         self.seek_drag = Some((t * dur.max(1) as f32) as u64);
                     }
                 }
-                if has_duration && seek_resp.drag_stopped() {
-                    let target = self.seek_drag.unwrap_or(pos).min(dur);
+                let commit_seek = seek_clicked || (has_duration && seek_resp.drag_stopped());
+                if commit_seek {
+                    let target = self.seek_drag.take().unwrap_or(pos).min(dur);
                     self.seek_drag = None;
                     let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
                 }
@@ -2315,15 +2318,22 @@ impl eframe::App for GuiAppImpl {
                     speaker_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
                 }
                 if speaker_resp.clicked() {
-                    self.volume = if muted {
-                        self.volume_before_mute.take().unwrap_or(0.6)
+                    let mut save_fallback = false;
+                    if muted {
+                        if let Some(previous) = self.volume_before_mute.take().filter(|&v| v > 0.0) {
+                            self.volume = previous.clamp(0.0, 1.0);
+                        } else {
+                            self.volume = 0.5;
+                            save_fallback = true;
+                        }
                     } else {
-                        self.volume_before_mute = Some(self.volume);
-                        0.0
+                        self.volume_before_mute = Some(self.volume.clamp(0.0, 1.0)).filter(|&v| v > 0.0);
+                        self.volume = 0.0;
                     }
-                    .clamp(0.0, 1.0);
                     let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
-                    storage::save_volume(self.volume);
+                    if save_fallback {
+                        storage::save_volume(self.volume);
+                    }
                 }
 
                 let vol_bar_rect = egui::Rect::from_min_size(
@@ -2347,9 +2357,7 @@ impl eframe::App for GuiAppImpl {
                     if let Some(pointer) = vol_resp.interact_pointer_pos() {
                         let t = ((pointer.x - vol_bar_rect.min.x) / vol_bar_rect.width()).clamp(0.0, 1.0);
                         self.volume = t.clamp(0.0, 1.0);
-                        if self.volume > 0.0 {
-                            self.volume_before_mute = None;
-                        }
+                        self.volume_before_mute = None;
                         let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
                         storage::save_volume(self.volume);
                     }
