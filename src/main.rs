@@ -1,8 +1,10 @@
 ﻿use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::env;
-use std::io::{BufRead, Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,6 +21,81 @@ const SEARCH_LIMIT: usize = 10;
 const PLAYLIST_TRACK_LIMIT: usize = 10;
 const PROBE_TRACK_LIMIT: usize = 2;
 const PROBE_BYTES: usize = 16;
+const CRASH_LOG_MAX_BYTES: u64 = 200 * 1024;
+
+fn install_crash_logging() {
+    prepare_crash_log();
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
+        let location = match info.location() {
+            Some(loc) => format!("{}:{}", loc.file(), loc.line()),
+            None => "unknown:0".to_string(),
+        };
+        append_crash_log_line(&format!("panic thread={thread} location={location}"));
+    }));
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn crash_log_path() -> Option<std::path::PathBuf> {
+    let appdata = env::var_os("APPDATA")?;
+    let dir = std::path::PathBuf::from(appdata).join("vkmusic");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("crash.log"))
+}
+
+fn prepare_crash_log() {
+    if let Some(path) = crash_log_path() {
+        trim_crash_log(&path);
+    }
+}
+
+fn trim_crash_log(path: &Path) {
+    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let len = match file.metadata() {
+        Ok(meta) => meta.len(),
+        Err(_) => return,
+    };
+    if len <= CRASH_LOG_MAX_BYTES { return; }
+    let keep_from = len.saturating_sub(CRASH_LOG_MAX_BYTES / 2);
+    if file.seek(SeekFrom::Start(keep_from)).is_err() { return; }
+    let mut tail = Vec::new();
+    if file.read_to_end(&mut tail).is_err() { return; }
+    if let Some(pos) = tail.iter().position(|&b| b == b'\n') {
+        tail.drain(..=pos);
+    }
+    if file.set_len(0).is_err() { return; }
+    if file.seek(SeekFrom::Start(0)).is_err() { return; }
+    let _ = file.write_all(&tail);
+}
+
+pub(crate) fn log_status_error(msg: &str) {
+    let safe = api::sanitize_output(msg);
+    append_crash_log_line(&format!("status {safe}"));
+}
+
+fn append_crash_log_line(line: &str) {
+    let path = match crash_log_path() {
+        Some(path) => path,
+        None => return,
+    };
+    let one_line: String = api::redact_urls(line)
+        .chars()
+        .take(240)
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    if one_line.trim().is_empty() { return; }
+    let ts = now_secs();
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "{ts} {one_line}");
+    }
+    trim_crash_log(&path);
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -53,6 +130,7 @@ fn run() -> Result<()> {
         || play_index.is_some();
 
     if gui_mode || !cli_mode {
+        install_crash_logging();
         let single_instance = try_single_instance_gui()?;
         if single_instance.is_none() {
             return Ok(());

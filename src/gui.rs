@@ -4,10 +4,11 @@ use crate::storage;
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
 use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::{Menu, MenuEvent, MenuItem}};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
+const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -286,6 +287,7 @@ struct GuiAppImpl {
     tray_menu_quit_id: String,
     window_hidden: bool,
     quit_requested: bool,
+    player_channel_closed: bool,
     last_tray_tooltip: String,
     my_filter: String,
     repeat_mode: RepeatMode,
@@ -419,6 +421,7 @@ impl GuiAppImpl {
             tray_menu_quit_id: String::new(),
             window_hidden: false,
             quit_requested: false,
+            player_channel_closed: false,
             last_tray_tooltip: String::new(),
             my_filter: String::new(),
             repeat_mode: RepeatMode::from_str(&storage::load_repeat()),
@@ -1264,6 +1267,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     if request_id != self.rec_request_id { continue; }
                     self.rec_loading = false;
                     self.rec_waiting_next = false;
+                    crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
@@ -1320,12 +1324,14 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 UiEvent::RestoredTrackUnavailable(msg) => {
                     self.restored_track_pending = false;
                     self.restored_track = None;
+                    crate::log_status_error(&msg);
                     self.status = msg;
                 }                UiEvent::AddDone { track_id } => {
                     self.add_states.insert(track_id, AddState::Done);
                     self.refresh_my_music_after_add();
                 }
                 UiEvent::AddError { track_id, msg } => {
+                    crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
@@ -1340,6 +1346,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
                 UiEvent::DeleteError { track_id, msg } => {
                     self.delete_states.insert(track_id, DeleteState::Idle);
+                    crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
@@ -1353,6 +1360,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         }
                         continue;
                     }
+                    crate::log_status_error(&msg);
                     let tracks_error = self.loading_tracks;
                     self.loading_tracks = false;
                     self.loading_playlists = false;
@@ -1382,7 +1390,20 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(false);
             if need_more { self.request_tracks_load(); }
         }
-        while let Ok(evt) = self.evt_rx.try_recv() {
+        loop {
+            let evt = match self.evt_rx.try_recv() {
+                Ok(evt) => evt,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !self.quit_requested && !self.player_channel_closed {
+                        self.player_channel_closed = true;
+                        self.status = PLAYER_CHANNEL_CLOSED_TEXT.to_string();
+                        crate::log_status_error("player channel closed");
+                        ctx.request_repaint();
+                    }
+                    break;
+                }
+            };
             match evt {
                 PlayerEvent::Downloading { artist, title, generation } => {
                     self.current_gen = generation;
@@ -1442,6 +1463,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.pending_play_track_id = None;
                     self.now_playing = None;
                     self.sync_tray_tooltip("vkmusic");
+                    crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
                     } else {
