@@ -68,6 +68,36 @@ impl Track {
             .unwrap_or_else(|| "--:--".to_string());
         format!("{} - {}  {}", self.artist, self.title, dur)
     }
+
+    pub fn is_playable(&self) -> bool {
+        self.url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Playlist {
+    pub owner_id: i64,
+    pub id: i64,
+    pub access_key: Option<String>,
+    pub title: String,
+    pub count: Option<u64>,
+}
+
+impl Playlist {
+    pub fn from_value(item: &Value) -> Option<Self> {
+        let owner_id = item.get("owner_id").and_then(Value::as_i64)?;
+        let id = item.get("id").and_then(Value::as_i64)?;
+        let title = string_field(item, "title");
+        let count = match item.get("count") {
+            Some(Value::Number(n)) => n.as_u64(),
+            _ => None,
+        };
+        let access_key = match item.get("access_key") {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        };
+        Some(Self { owner_id, id, access_key, title, count })
+    }
 }
 
 pub fn build_client(user_agent: &str) -> Result<reqwest::blocking::Client> {
