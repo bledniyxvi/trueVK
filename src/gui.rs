@@ -56,6 +56,19 @@ const PANEL_ZONES_H: f32 = 92.0;
 const PANEL_CENTER_W: f32 = 240.0;
 const PANEL_RIGHT_W: f32 = 220.0;
 const PANEL_ZONE_GAP: f32 = 3.0;
+const LOGIN_OPEN_LABEL: &str = "\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}";
+const LOGIN_COPY_LABEL: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}";
+const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}\u{20}\u{441}\u{44e}\u{434}\u{430}";
+const LOGIN_SUBMIT_LABEL: &str = "\u{412}\u{43e}\u{439}\u{442}\u{438}";
+const LOGIN_LINK_HINT: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}\u{20}\u{441}\u{44e}\u{434}\u{430}";
+const LOGIN_MORE_LABEL: &str = "\u{414}\u{43e}\u{43f}\u{43e}\u{43b}\u{43d}\u{438}\u{442}\u{435}\u{43b}\u{44c}\u{43d}\u{43e}";
+const LOGIN_HEADING: &str = "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}\u{2e}\u{20}\u{414}\u{430}\u{432}\u{430}\u{439}\u{20}\u{43f}\u{43e}\u{434}\u{43a}\u{43b}\u{44e}\u{447}\u{438}\u{43c}\u{20}\u{442}\u{432}\u{43e}\u{439}\u{20}\u{56}\u{4b}\u{2e}";
+const LOGIN_SUBHEADING: &str = "\u{42d}\u{442}\u{43e}\u{20}\u{434}\u{435}\u{43b}\u{430}\u{435}\u{442}\u{441}\u{44f}\u{20}\u{43e}\u{434}\u{438}\u{43d}\u{20}\u{440}\u{430}\u{437}\u{2e}";
+const LOGIN_STEP_ONE: &str = "\u{41d}\u{430}\u{436}\u{43c}\u{438}\u{20}\u{ab}\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}\u{bb}\u{20}\u{438}\u{20}\u{432}\u{43e}\u{439}\u{434}\u{438}\u{20}\u{432}\u{20}\u{430}\u{43a}\u{43a}\u{430}\u{443}\u{43d}\u{442}\u{2e}";
+const LOGIN_STEP_TWO: &str = "\u{420}\u{430}\u{437}\u{440}\u{435}\u{448}\u{438}\u{20}\u{434}\u{43e}\u{441}\u{442}\u{443}\u{43f}\u{2e}\u{20}\u{41e}\u{442}\u{43a}\u{440}\u{43e}\u{435}\u{442}\u{441}\u{44f}\u{20}\u{43f}\u{443}\u{441}\u{442}\u{430}\u{44f}\u{20}\u{441}\u{442}\u{440}\u{430}\u{43d}\u{438}\u{446}\u{430}\u{2c}\u{20}\u{44d}\u{442}\u{43e}\u{20}\u{43d}\u{43e}\u{440}\u{43c}\u{430}\u{43b}\u{44c}\u{43d}\u{43e}\u{2e}";
+const LOGIN_STEP_THREE: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{443}\u{439}\u{20}\u{430}\u{434}\u{440}\u{435}\u{441}\u{20}\u{44d}\u{442}\u{43e}\u{439}\u{20}\u{441}\u{442}\u{440}\u{430}\u{43d}\u{438}\u{446}\u{44b}\u{20}\u{446}\u{435}\u{43b}\u{438}\u{43a}\u{43e}\u{43c}\u{20}\u{28}\u{43}\u{74}\u{72}\u{6c}\u{2b}\u{4c}\u{2c}\u{20}\u{43f}\u{43e}\u{442}\u{43e}\u{43c}\u{20}\u{43}\u{74}\u{72}\u{6c}\u{2b}\u{43}\u{29}\u{20}\u{438}\u{20}\u{432}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{435}\u{433}\u{43e}\u{20}\u{441}\u{44e}\u{434}\u{430}\u{2e}";
+const LOGIN_PRIVACY: &str = "\u{42d}\u{442}\u{430}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{430}\u{20}\u{440}\u{430}\u{431}\u{43e}\u{442}\u{430}\u{435}\u{442}\u{20}\u{43a}\u{430}\u{43a}\u{20}\u{43f}\u{430}\u{440}\u{43e}\u{43b}\u{44c}\u{2e}\u{20}\u{41d}\u{438}\u{43a}\u{43e}\u{43c}\u{443}\u{20}\u{435}\u{451}\u{20}\u{43d}\u{435}\u{20}\u{43e}\u{442}\u{43f}\u{440}\u{430}\u{432}\u{43b}\u{44f}\u{439}\u{2e}\u{20}\u{41f}\u{43b}\u{435}\u{435}\u{440}\u{20}\u{445}\u{440}\u{430}\u{43d}\u{438}\u{442}\u{20}\u{435}\u{451}\u{20}\u{442}\u{43e}\u{43b}\u{44c}\u{43a}\u{43e}\u{20}\u{443}\u{20}\u{442}\u{435}\u{431}\u{44f}\u{20}\u{43d}\u{430}\u{20}\u{43a}\u{43e}\u{43c}\u{43f}\u{44c}\u{44e}\u{442}\u{435}\u{440}\u{435}\u{2c}\u{20}\u{432}\u{20}\u{445}\u{440}\u{430}\u{43d}\u{438}\u{43b}\u{438}\u{449}\u{435}\u{20}\u{43f}\u{430}\u{440}\u{43e}\u{43b}\u{435}\u{439}\u{20}\u{57}\u{69}\u{6e}\u{64}\u{6f}\u{77}\u{73}\u{2e}\u{20}\u{412}\u{44b}\u{439}\u{442}\u{438}\u{20}\u{43c}\u{43e}\u{436}\u{43d}\u{43e}\u{20}\u{432}\u{20}\u{43b}\u{44e}\u{431}\u{43e}\u{439}\u{20}\u{43c}\u{43e}\u{43c}\u{435}\u{43d}\u{442}\u{2e}";
+const LOGIN_DISCLAIMER: &str = "\u{421}\u{43f}\u{43e}\u{441}\u{43e}\u{431}\u{20}\u{43d}\u{435}\u{43e}\u{444}\u{438}\u{446}\u{438}\u{430}\u{43b}\u{44c}\u{43d}\u{44b}\u{439}\u{3a}\u{20}\u{56}\u{4b}\u{20}\u{43c}\u{43e}\u{436}\u{435}\u{442}\u{20}\u{435}\u{433}\u{43e}\u{20}\u{437}\u{430}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{438}\u{43b}\u{438}\u{20}\u{43f}\u{43e}\u{43f}\u{440}\u{43e}\u{441}\u{438}\u{442}\u{44c}\u{20}\u{43f}\u{43e}\u{434}\u{442}\u{432}\u{435}\u{440}\u{434}\u{438}\u{442}\u{44c}\u{20}\u{432}\u{445}\u{43e}\u{434}\u{2e}\u{20}\u{415}\u{441}\u{43b}\u{438}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{430}\u{20}\u{43f}\u{435}\u{440}\u{435}\u{441}\u{442}\u{430}\u{43b}\u{430}\u{20}\u{440}\u{430}\u{431}\u{43e}\u{442}\u{430}\u{442}\u{44c}\u{2c}\u{20}\u{43f}\u{440}\u{43e}\u{441}\u{442}\u{43e}\u{20}\u{43f}\u{440}\u{43e}\u{439}\u{434}\u{438}\u{20}\u{448}\u{430}\u{433}\u{438}\u{20}\u{437}\u{430}\u{43d}\u{43e}\u{432}\u{43e}\u{2e}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -406,6 +419,67 @@ fn ghost_pill_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str)
         resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
     }
     resp.clicked()
+}
+
+fn primary_pill_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str) -> bool {
+    let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
+    let hovered = resp.hovered();
+    let radius = egui::CornerRadius::same(17);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, if hovered { theme::ACCENT_DIM } else { theme::ACCENT });
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold_font(13.0), theme::BG);
+    if hovered {
+        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+fn draw_step_circle(ui: &mut egui::Ui, rect: egui::Rect, number: usize) {
+    let painter = ui.painter();
+    let radius = rect.width() * 0.5;
+    painter.circle_filled(rect.center(), radius, theme::ACCENT_DIM);
+    painter.circle_stroke(rect.center(), radius, egui::Stroke::new(1.0, theme::ACCENT));
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, number.to_string(), theme::mono_font(12.0), theme::ACCENT);
+}
+
+fn login_step_row(ui: &mut egui::Ui, number: usize, text: &str) {
+    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::hover());
+    let circle = egui::Rect::from_center_size(
+        egui::pos2(row_rect.min.x + 12.0, row_rect.min.y + 14.0),
+        egui::vec2(24.0, 24.0),
+    );
+    draw_step_circle(ui, circle, number);
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(row_rect.min.x + 36.0, row_rect.min.y),
+        row_rect.max,
+    );
+    let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+    text_ui.set_min_height(row_rect.height());
+    text_ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT)).selectable(false).wrap());
+}
+
+fn styled_login_field(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, value: &mut String, hint: &'static str, password: bool) -> egui::Response {
+    let radius = egui::CornerRadius::same(8);
+    ui.painter().rect_filled(rect, radius, theme::SURFACE);
+    let text_rect = rect.shrink2(egui::vec2(10.0, 0.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.set_min_height(rect.height());
+    let resp = child.add(
+        egui::TextEdit::singleline(value)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .desired_width(text_rect.width())
+            .hint_text(egui::RichText::new(hint).color(theme::MUTED))
+            .password(password),
+    );
+    let focused = resp.has_focus();
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, if focused { theme::ACCENT } else { theme::BORDER }),
+        egui::StrokeKind::Middle,
+    );
+    resp
 }
 
 fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: TransportIcon, enabled: bool, tooltip: &str) -> bool {
@@ -2049,40 +2123,149 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
-    fn login_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Login");
-        ui.label("Paste full browser URL or access_token:");
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.login_input).password(true).desired_width(ui.available_width() - 60.0));
-            if ui.small_button("Paste").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-            }
-        });
-        ui.label("User-Agent:");
-        ui.add(egui::TextEdit::singleline(&mut self.ua_input).desired_width(f32::INFINITY));
-        if ui.button("Login").clicked() {
-            if let Some(token) = api::extract_access_token(&self.login_input) {
-                let ua = self.ua_input.trim().to_string();
-                if ua.is_empty() {
-                    self.status = "VK API error: missing User-Agent".to_string();
-                } else {
-                    self.token = token;
-                    self.ua = ua;
-                    self.logged_in = true;
-                    self.login_input.clear();
-                    self.status.clear();
-                    self.tracks.clear();
-                    self.tracks_count = None;
-                    self.next_offset = 0;
-                    self.filter_autoload_stopped = false;
-                    self.using_saved_credentials = false;
-                    self.credentials_saved = false;
-                    self.request_tracks_load();
-                }
+    fn login_now(&mut self) {
+        if let Some(token) = api::extract_access_token(&self.login_input) {
+            let ua = self.ua_input.trim().to_string();
+            if ua.is_empty() {
+                self.status = "VK API error: missing User-Agent".to_string();
             } else {
-                self.status = "VK API error: access_token not found".to_string();
+                self.token = token;
+                self.ua = ua;
+                self.logged_in = true;
+                self.login_input.clear();
+                self.status.clear();
+                self.tracks.clear();
+                self.tracks_count = None;
+                self.next_offset = 0;
+                self.filter_autoload_stopped = false;
+                self.using_saved_credentials = false;
+                self.credentials_saved = false;
+                self.request_tracks_load();
             }
+        } else {
+            self.status = "VK API error: access_token not found".to_string();
         }
+    }
+
+    fn login_ui(&mut self, ui: &mut egui::Ui) {
+        let available = ui.available_rect_before_wrap();
+        let card_w = 480.0f32.min((available.width() - 32.0).max(1.0));
+        let inner_w = (card_w - 48.0).max(1.0);
+        let top_gap = ((available.height() - 660.0) * 0.5).max(0.0);
+        let left_gap = ((available.width() - card_w) * 0.5).max(0.0);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(top_gap);
+            ui.horizontal(|ui| {
+                ui.add_space(left_gap);
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(24))
+                    .show(ui, |ui| {
+                        ui.set_max_width(inner_w);
+                        ui.set_min_width(inner_w);
+
+                        ui.horizontal(|ui| {
+                            let (mark_rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 20.0), egui::Sense::hover());
+                            draw_brand_mark(ui.painter(), mark_rect);
+                            ui.add_space(8.0);
+                            let (name_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w - 38.0, 20.0), egui::Sense::hover());
+                            ui.painter().text(
+                                egui::pos2(name_rect.min.x, name_rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                theme::APP_NAME,
+                                theme::semibold_font(18.0),
+                                theme::TEXT,
+                            );
+                        });
+                        ui.add_space(16.0);
+
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(LOGIN_HEADING).font(theme::semibold_font(22.0)).color(theme::TEXT),
+                        ).selectable(false).wrap());
+                        ui.add_space(4.0);
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(LOGIN_SUBHEADING).size(12.0).color(theme::MUTED),
+                        ).selectable(false).wrap());
+                        ui.add_space(16.0);
+
+                        login_step_row(ui, 1, LOGIN_STEP_ONE);
+                        login_step_row(ui, 2, LOGIN_STEP_TWO);
+                        login_step_row(ui, 3, LOGIN_STEP_THREE);
+                        ui.add_space(10.0);
+
+                        let button_gap = 10.0;
+                        let button_w = (inner_w - button_gap) * 0.5;
+                        ui.horizontal(|ui| {
+                            let (open_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
+                            if primary_pill_button(ui, open_rect, "login.open", LOGIN_OPEN_LABEL) {
+                                if std::process::Command::new("rundll32")
+                                    .args(["url.dll,FileProtocolHandler", api::AUTH_URL])
+                                    .spawn()
+                                    .is_err()
+                                {
+                                    self.status = "browser open error".to_string();
+                                }
+                            }
+                            ui.add_space(button_gap);
+                            let (copy_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
+                            if ghost_pill_button(ui, copy_rect, "login.copy", LOGIN_COPY_LABEL) {
+                                ui.ctx().copy_text(api::AUTH_URL.to_string());
+                            }
+                        });
+
+                        ui.add_space(12.0);
+                        let (link_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                        let link_resp = styled_login_field(
+                            ui,
+                            link_rect,
+                            ui.scope_id().with("login.link"),
+                            &mut self.login_input,
+                            LOGIN_LINK_HINT,
+                            true,
+                        );
+                        let submit_on_enter = link_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                        ui.add_space(8.0);
+                        let (paste_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                        if ghost_pill_button(ui, paste_rect, "login.paste", LOGIN_PASTE_LABEL) {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                        }
+
+                        ui.add_space(8.0);
+                        let (submit_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                        let submit_clicked = primary_pill_button(ui, submit_rect, "login.submit", LOGIN_SUBMIT_LABEL);
+                        if submit_clicked || submit_on_enter {
+                            self.login_now();
+                        }
+
+                        ui.add_space(12.0);
+                        ui.collapsing(LOGIN_MORE_LABEL, |ui| {
+                            ui.add(egui::Label::new("User-Agent:").selectable(false));
+                            let (ua_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 30.0), egui::Sense::hover());
+                            styled_login_field(
+                                ui,
+                                ua_rect,
+                                ui.scope_id().with("login.ua"),
+                                &mut self.ua_input,
+                                "",
+                                false,
+                            );
+                        });
+
+                        ui.add_space(14.0);
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(LOGIN_PRIVACY).size(11.0).color(theme::MUTED),
+                        ).selectable(false).wrap());
+                        ui.add_space(8.0);
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(LOGIN_DISCLAIMER).size(11.0).color(theme::MUTED),
+                        ).selectable(false).wrap());
+                    });
+            });
+        });
     }
 
     fn ensure_cjk_font(&mut self, ctx: &egui::Context, text: &str) {

@@ -3,8 +3,11 @@ pub const API_HOST: &str = "https://api.vk.ru/method/";
 pub const REQUEST_TIMEOUT_SECS: u64 = 20;
 pub const PLAY_MAX_BYTES: usize = 40 * 1024 * 1024;
 pub const DEFAULT_ANDROID_UA: &str = "VKAndroidApp/8.154-99999 (Android 12; SDK 32; arm64-v8a; Pixel 6; ru; 2960x1440)";
+// Authorize URL from HromasDev/vkord (Tauri VK player), verified for this project.
+pub const AUTH_URL: &str = "https://oauth.vk.com/authorize?client_id=6287487&scope=1073737727&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token";
 
 use anyhow::{anyhow, Context, Result};
+
 use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
