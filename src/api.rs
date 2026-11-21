@@ -34,6 +34,13 @@ pub struct VkError {
     pub error_msg: Option<String>,
 }
 
+pub fn is_auth_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let msg = cause.to_string();
+        msg.contains("VK API error 5:") || msg.contains("VK API error 15:")
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct Track {
     pub artist: String,

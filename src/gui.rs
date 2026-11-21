@@ -1,5 +1,6 @@
 ﻿use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
 use crate::player::{PlayerCmd, PlayerEvent};
+use crate::storage;
 use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -36,7 +37,7 @@ impl NowPlaying {
     }
 }
 
-pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> {
+pub fn run_gui(env_token: Option<String>, env_ua: Option<String>) -> eframe::Result<()> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PlayerCmd>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
     let (ui_evt_tx, ui_evt_rx) = std::sync::mpsc::channel::<UiEvent>();
@@ -53,12 +54,31 @@ pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> 
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
+            let (token, ua, from_saved) = resolve_startup_credentials(env_token, env_ua);
             let client_ua = ua.clone().unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
             let client = api::build_client(&client_ua).unwrap_or_else(|_| reqwest::blocking::Client::new());
             crate::player::spawn_player_worker(client, cmd_rx, evt_tx, ctx.clone());
-            Ok(Box::new(GuiAppImpl::new(cmd_tx, evt_rx, ui_evt_tx, ui_evt_rx, token, ua, ctx)))
+            Ok(Box::new(GuiAppImpl::new(
+                cmd_tx, evt_rx, ui_evt_tx, ui_evt_rx, token, ua, from_saved, ctx,
+            )))
         }),
     )
+}
+
+fn resolve_startup_credentials(
+    env_token: Option<String>,
+    env_ua: Option<String>,
+) -> (Option<String>, Option<String>, bool) {
+    let env_token = env_token.filter(|v| !v.trim().is_empty());
+    let env_ua = env_ua.filter(|v| !v.trim().is_empty());
+    if env_token.is_some() && env_ua.is_some() {
+        return (env_token, env_ua, false);
+    }
+    let (saved_token, saved_ua) = storage::load_saved_credentials();
+    if saved_token.is_some() && saved_ua.is_some() {
+        return (saved_token, saved_ua, true);
+    }
+    (None, None, false)
 }
 
 enum UiEvent {
@@ -94,6 +114,8 @@ struct GuiAppImpl {
     fps_last: Instant,
     last_frame: Instant,
     egui_ctx: egui::Context,
+    using_saved_credentials: bool,
+    credentials_saved: bool,
 }
 
 impl GuiAppImpl {
@@ -104,11 +126,13 @@ impl GuiAppImpl {
         ui_evt_rx: Receiver<UiEvent>,
         token: Option<String>,
         ua: Option<String>,
+        using_saved_credentials: bool,
         egui_ctx: egui::Context,
     ) -> Self {
         let logged_in = token.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
             && ua.as_ref().map(|u| !u.is_empty()).unwrap_or(false);
         let ua_val = ua.unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
+        let volume = storage::load_volume().clamp(0.0, 1.0);
         let mut app = Self {
             cmd_tx,
             evt_rx,
@@ -125,7 +149,7 @@ impl GuiAppImpl {
             next_offset: 0,
             status: if logged_in { "Ready".to_string() } else { "Login required".to_string() },
             now_playing: None,
-            volume: 1.0,
+            volume,
             seek_drag: None,
             pending_play_index: None,
             selected_index: None,
@@ -137,7 +161,10 @@ impl GuiAppImpl {
             fps_last: Instant::now(),
             last_frame: Instant::now(),
             egui_ctx,
+            using_saved_credentials,
+            credentials_saved: false,
         };
+        let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         if app.logged_in {
             app.request_tracks_load();
         }
@@ -179,6 +206,27 @@ impl GuiAppImpl {
             }
             ctx.request_repaint();
         });
+    }
+
+    fn logout_to_login(&mut self, message: Option<String>) {
+        storage::delete_credentials();
+        self.token.clear();
+        self.login_input.clear();
+        self.logged_in = false;
+        self.using_saved_credentials = false;
+        self.credentials_saved = false;
+        self.tracks.clear();
+        self.tracks_count = None;
+        self.loading_tracks = false;
+        self.next_offset = 0;
+        self.now_playing = None;
+        self.pending_play_index = None;
+        self.selected_index = None;
+        self.seek_drag = None;
+        self.current_gen = 0;
+        self.active_tab = Tab::MyMusic;
+        let _ = self.cmd_tx.send(PlayerCmd::Stop);
+        self.status = message.unwrap_or_else(|| "Login required".to_string());
     }
 
     fn play_index(&mut self, index: usize) {
@@ -260,11 +308,20 @@ impl GuiAppImpl {
                         if let Some(c) = count { self.tracks_count = Some(c); }
                         self.loading_tracks = false;
                         self.status.clear();
+                        if !self.credentials_saved {
+                            storage::save_credentials(&self.token, &self.ua);
+                            self.credentials_saved = true;
+                            self.using_saved_credentials = false;
+                        }
                     }
                 }
                 UiEvent::LoadError(msg) => {
                     self.loading_tracks = false;
-                    self.status = msg;
+                    if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
+                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else {
+                        self.status = msg;
+                    }
                 }
             }
         }
@@ -312,8 +369,12 @@ impl GuiAppImpl {
                     self.volume = vol.clamp(0.0, 1.0);
                 }
                 PlayerEvent::Error(msg) => {
-                    self.status = msg;
                     self.pending_play_index = None;
+                    if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
+                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else {
+                        self.status = msg;
+                    }
                 }
             }
         }
@@ -347,6 +408,8 @@ impl GuiAppImpl {
                     self.tracks.clear();
                     self.tracks_count = None;
                     self.next_offset = 0;
+                    self.using_saved_credentials = false;
+                    self.credentials_saved = false;
                     self.request_tracks_load();
                 }
             } else {
@@ -444,13 +507,15 @@ impl eframe::App for GuiAppImpl {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let vol_resp = ui.add(
                         egui::Slider::new(&mut self.volume, 0.0..=1.0)
-                            .show_value(true)
-                            .custom_formatter(|v, _| format!("{}%", (v * 100.0).round().clamp(0.0, 100.0) as i32)),
+                            .show_value(false),
                     );
                     if vol_resp.changed() || vol_resp.drag_stopped() {
                         self.volume = self.volume.clamp(0.0, 1.0);
                         let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
+                        storage::save_volume(self.volume);
                     }
+                    let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
+                    ui.add(egui::Label::new(format!("{pct}%")).selectable(false));
                     ui.add(egui::Label::new("Громкость").selectable(false));
                 });
             });
@@ -470,6 +535,11 @@ impl eframe::App for GuiAppImpl {
                 ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "Моя музыка");
                 ui.selectable_value(&mut self.active_tab, Tab::Playlists, "Плейлисты");
                 ui.selectable_value(&mut self.active_tab, Tab::Search, "Поиск");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Log out").clicked() {
+                        self.logout_to_login(None);
+                    }
+                });
             });
             ui.separator();
 

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod api;
 mod gui;
 mod player;
+mod storage;
 
 use api::{AudioGetResponse, PlaylistsGetResponse, Track};
 
@@ -40,10 +41,18 @@ fn run() -> Result<()> {
     let play_index = arg_value(&args, "--play");
     let play_seconds = arg_value(&args, "--seconds");
 
-    if gui_mode {
-        let token = env::var("VK_TOKEN").ok().filter(|v| !v.trim().is_empty());
-        let ua = env::var("VK_UA").ok().filter(|v| !v.trim().is_empty());
-        gui::run_gui(token, ua).map_err(|e| anyhow!("{}", e))?;
+    let cli_mode = shape_mode
+        || playlists_mode
+        || probe_mode
+        || probe_bytes_mode
+        || search_query.is_some()
+        || playlist_index.is_some()
+        || play_index.is_some();
+
+    if gui_mode || !cli_mode {
+        let env_token = env::var("VK_TOKEN").ok().filter(|v| !v.trim().is_empty());
+        let env_ua = env::var("VK_UA").ok().filter(|v| !v.trim().is_empty());
+        gui::run_gui(env_token, env_ua).map_err(|e| anyhow!("{}", e))?;
         return Ok(());
     }
 
