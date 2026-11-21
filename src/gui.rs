@@ -7,10 +7,26 @@ use std::time::{Duration, Instant};
 struct NowPlaying {
     artist: String,
     title: String,
-    position_secs: u64,
+    base_secs: f64,
+    started_at: Option<Instant>,
     duration_secs: Option<u64>,
     paused: bool,
     track_index: Option<usize>,
+}
+
+impl NowPlaying {
+    fn position_secs(&self) -> u64 {
+        let mut pos = self.base_secs;
+        if !self.paused {
+            if let Some(started) = self.started_at {
+                pos += started.elapsed().as_secs_f64();
+            }
+        }
+        if let Some(dur) = self.duration_secs {
+            pos = pos.min(dur as f64);
+        }
+        if pos < 0.0 { 0 } else { pos as u64 }
+    }
 }
 
 pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> {
@@ -205,17 +221,17 @@ impl GuiAppImpl {
                     self.status = String::new();
                     self.seek_drag = None;
                     self.now_playing = Some(NowPlaying {
-                        artist, title, position_secs: 0, duration_secs, paused: false,
+                        artist, title, base_secs: 0.0, started_at: Some(Instant::now()), duration_secs, paused: false,
                         track_index: self.pending_play_index.take(),
                     });
                 }
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_index = self.now_playing.as_ref().and_then(|np| np.track_index).or(self.pending_play_index);
-                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: true, track_index });
+                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_index });
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
                     let track_index = self.now_playing.as_ref().and_then(|np| np.track_index).or(self.pending_play_index);
-                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: false, track_index });
+                    self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: Some(Instant::now()), duration_secs, paused: false, track_index });
                 }
                 PlayerEvent::Stopped => {
                     self.now_playing = None;
@@ -230,7 +246,8 @@ impl GuiAppImpl {
                 }
                 PlayerEvent::Position { position_secs, duration_secs } => {
                     if let Some(np) = self.now_playing.as_mut() {
-                        np.position_secs = position_secs;
+                        np.base_secs = position_secs as f64;
+                        np.started_at = if np.paused { None } else { Some(Instant::now()) };
                         if duration_secs.is_some() { np.duration_secs = duration_secs; }
                     }
                 }
@@ -312,7 +329,7 @@ impl eframe::App for GuiAppImpl {
             ui.horizontal(|ui| {
                 let np_text = if let Some(np) = &self.now_playing {
                     let dur = np.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-                    let pos = self.seek_drag.unwrap_or(np.position_secs);
+                    let pos = self.seek_drag.unwrap_or(np.position_secs());
                     format!("now playing: {} - {}  {} / {}", np.artist, np.title, api::format_mm_ss(pos), dur)
                 } else {
                     "now playing: -".to_string()
@@ -335,7 +352,10 @@ impl eframe::App for GuiAppImpl {
             ui.horizontal(|ui| {
                 ui.label("Seek");
                 let (pos, dur) = self.now_playing.as_ref()
-                    .map(|np| (self.seek_drag.unwrap_or(np.position_secs), np.duration_secs.unwrap_or(np.position_secs.max(1))))
+                    .map(|np| {
+                        let p = np.position_secs();
+                        (self.seek_drag.unwrap_or(p), np.duration_secs.unwrap_or(p.max(1)))
+                    })
                     .unwrap_or((0, 1));
                 let mut seek_pos = pos.min(dur);
                 let seek_resp = ui.add_enabled(self.now_playing.is_some(), egui::Slider::new(&mut seek_pos, 0..=dur.max(1)).text("s").clamping(egui::SliderClamping::Always));

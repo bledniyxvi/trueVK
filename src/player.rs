@@ -2,7 +2,7 @@ use crate::api::{map_reqwest_error, sanitize_output, Track, PLAY_MAX_BYTES};
 use anyhow::{anyhow, Result};
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde_json::Value;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{Receiver, Sender},
@@ -55,6 +55,7 @@ struct PlayingState {
     duration_secs: Option<u64>,
     paused: bool,
     stop_flag: Arc<AtomicBool>,
+    seeking: Arc<AtomicBool>,
     monitor: Option<thread::JoinHandle<()>>,
     bytes: Arc<Vec<u8>>,
 }
@@ -103,24 +104,31 @@ fn worker_loop(
             PlayerCmd::Seek(sec) => {
                 if let Some(s) = state.as_mut() {
                     let target = Duration::from_secs(sec);
-                    let pos = if s.player.try_seek(target).is_ok() {
-                        target
-                    } else {
-                        let decoder = match Decoder::try_from(Cursor::new(s.bytes.as_ref().clone())) {
-                            Ok(d) => d,
-                            Err(_) => {
-                                send_evt(&evt_tx, &ctx, PlayerEvent::Error("request failed (decode)".to_string()));
-                                continue;
+                    s.seeking.store(true, Ordering::Relaxed);
+                    let pos = match s.player.try_seek(target) {
+                        Ok(()) => target,
+                        Err(e) => {
+                            eprintln!("try_seek failed: {e:?}");
+                            let decoder = match make_decoder(Arc::clone(&s.bytes)) {
+                                Ok(d) => d,
+                                Err(_) => {
+                                    s.seeking.store(false, Ordering::Relaxed);
+                                    send_evt(&evt_tx, &ctx, PlayerEvent::Error("request failed (decode)".to_string()));
+                                    continue;
+                                }
+                            };
+                            let source = decoder.skip_duration(target);
+                            s.player.clear();
+                            s.player.append(source);
+                            if s.paused {
+                                s.player.pause();
+                            } else {
+                                s.player.play();
                             }
-                        };
-                        let source = decoder.skip_duration(target);
-                        s.player.clear();
-                        s.player.append(source);
-                        if s.paused {
-                            s.player.pause();
+                            target
                         }
-                        target
                     };
+                    s.seeking.store(false, Ordering::Relaxed);
                     if s.paused {
                         send_evt(&evt_tx, &ctx, PlayerEvent::Paused { artist: s.artist.clone(), title: s.title.clone(), position_secs: pos.as_secs(), duration_secs: s.duration_secs });
                     } else {
@@ -211,7 +219,7 @@ fn play_track(
     let player = Arc::new(Player::connect_new(&stream.mixer()));
     player.set_volume(volume);
     let bytes = Arc::new(bytes);
-    let decoder = Decoder::try_from(Cursor::new(bytes.as_ref().clone())).map_err(|_| anyhow!("request failed (decode)"))?;
+    let decoder = make_decoder(Arc::clone(&bytes))?;
     player.append(decoder);
 
     send_evt(
@@ -226,9 +234,11 @@ fn play_track(
     );
 
     let stop_flag = Arc::new(AtomicBool::new(false));
+    let seeking = Arc::new(AtomicBool::new(false));
     let monitor = spawn_monitor(
         Arc::clone(&player),
         Arc::clone(&stop_flag),
+        Arc::clone(&seeking),
         generation,
         current_generation,
         evt_tx.clone(),
@@ -244,6 +254,7 @@ fn play_track(
         duration_secs,
         paused: false,
         stop_flag,
+        seeking,
         monitor: Some(monitor),
         bytes,
     })
@@ -252,6 +263,7 @@ fn play_track(
 fn spawn_monitor(
     player: Arc<Player>,
     stop_flag: Arc<AtomicBool>,
+    seeking: Arc<AtomicBool>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
     evt_tx: Sender<PlayerEvent>,
@@ -267,8 +279,11 @@ fn spawn_monitor(
             if current_generation.load(Ordering::Relaxed) != generation {
                 break;
             }
+            if seeking.load(Ordering::Relaxed) {
+                continue;
+            }
             if player.empty() {
-                if current_generation.load(Ordering::Relaxed) == generation {
+                if current_generation.load(Ordering::Relaxed) == generation && !seeking.load(Ordering::Relaxed) {
                     let _ = evt_tx.send(PlayerEvent::Ended { generation });
                     ctx.request_repaint();
                 }
@@ -276,6 +291,25 @@ fn spawn_monitor(
             }
         }
     })
+}
+
+#[derive(Clone)]
+struct SharedBytes(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+fn make_decoder(bytes: Arc<Vec<u8>>) -> Result<Decoder<Cursor<SharedBytes>>> {
+    let len = bytes.len() as u64;
+    Decoder::builder()
+        .with_data(Cursor::new(SharedBytes(bytes)))
+        .with_byte_len(len)
+        .with_seekable(true)
+        .build()
+        .map_err(|_| anyhow!("request failed (decode)"))
 }
 
 fn decode_duration(bytes: &[u8]) -> Option<Duration> {
