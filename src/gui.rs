@@ -1128,8 +1128,12 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                             self.credentials_saved = true;
                             self.using_saved_credentials = false;
                         }
-                        if self.queue_source == QueueSource::MyMusic {
+                        if self.queue_source == QueueSource::MyMusic && self.my_filter.trim().is_empty() {
                             self.queue = self.tracks.clone();
+                        }
+                        let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(true);
+                        if !self.my_filter.trim().is_empty() && need_more {
+                            self.request_tracks_load();
                         }
                     }
                 }
@@ -1294,6 +1298,10 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     }
                 }
             }
+        }
+        if !self.my_filter.trim().is_empty() && !self.loading_tracks {
+            let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(true);
+            if need_more { self.request_tracks_load(); }
         }
         while let Ok(evt) = self.evt_rx.try_recv() {
             match evt {
