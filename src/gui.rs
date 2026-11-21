@@ -3,6 +3,7 @@ use crate::player::{PlayerCmd, PlayerEvent};
 use crate::storage;
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
+use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::{Menu, MenuEvent, MenuItem}};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -153,6 +154,8 @@ enum UiEvent {
     DeleteDone { track_id: TrackId },
     DeleteError { track_id: TrackId, msg: String },
     MediaKey(MediaHotkey),
+    TrayClick(MouseButton, MouseButtonState),
+    TrayMenu(String),
     RestoredTrackResolved { track: Track },
     RestoredTrackUnavailable(String),
     LoadError(String),
@@ -232,6 +235,34 @@ struct GuiAppImpl {
     hotkey_status: String,
     restored_track: Option<Track>,
     restored_track_pending: bool,
+    _tray_icon: Option<TrayIcon>,
+    tray_menu_show_id: String,
+    tray_menu_playpause_id: String,
+    tray_menu_next_id: String,
+    tray_menu_quit_id: String,
+    window_hidden: bool,
+    quit_requested: bool,
+}
+
+fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
+    let size: u32 = 32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let c = size as f32 / 2.0;
+    let r = size as f32 / 2.0 - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - c;
+            let dy = y as f32 + 0.5 - c;
+            if dx * dx + dy * dy <= r * r {
+                let i = ((y * size + x) * 4) as usize;
+                rgba[i] = 0x4a;
+                rgba[i + 1] = 0x90;
+                rgba[i + 2] = 0xe2;
+                rgba[i + 3] = 0xff;
+            }
+        }
+    }
+    Ok(TrayIconImage::from_rgba(rgba, size, size)?)
 }
 
 impl GuiAppImpl {
@@ -333,9 +364,17 @@ impl GuiAppImpl {
                 audio_streams: None,
             }),
             restored_track_pending: false,
+            _tray_icon: None,
+            tray_menu_show_id: String::new(),
+            tray_menu_playpause_id: String::new(),
+            tray_menu_next_id: String::new(),
+            tray_menu_quit_id: String::new(),
+            window_hidden: false,
+            quit_requested: false,
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
+        app.build_tray();
         if app.logged_in {
             app.request_tracks_load();
         }
@@ -790,6 +829,54 @@ fn set_queue_for_my_music(&mut self) {
         self._hotkey_manager = Some(manager);
     }
 
+    fn build_tray(&mut self) {
+        let icon = match make_tray_icon() {
+            Ok(i) => i,
+            Err(e) => { self.hotkey_status = format!("tray unavailable: {}", api::sanitize_output(&format!("{e:#}"))); return; }
+        };
+        let show = MenuItem::new("????????", true, None);
+        let playpause = MenuItem::new("????? / ??????", true, None);
+        let next = MenuItem::new("?????????", true, None);
+        let quit = MenuItem::new("?????", true, None);
+        self.tray_menu_show_id = show.id().0.clone();
+        self.tray_menu_playpause_id = playpause.id().0.clone();
+        self.tray_menu_next_id = next.id().0.clone();
+        self.tray_menu_quit_id = quit.id().0.clone();
+        let menu = Menu::new();
+        let _ = menu.append(&show);
+        let _ = menu.append(&playpause);
+        let _ = menu.append(&next);
+        let _ = menu.append(&quit);
+        let tray = match TrayIconBuilder::new()
+            .with_tooltip("vkmusic")
+            .with_icon(icon)
+            .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false)
+            .build() {
+            Ok(t) => t,
+            Err(e) => { self.hotkey_status = format!("tray unavailable: {}", api::sanitize_output(&format!("{e:#}"))); return; }
+        };
+
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let _ = TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            match event {
+                TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
+                    let _ = tx.send(UiEvent::TrayClick(MouseButton::Left, MouseButtonState::Up));
+                    ctx.request_repaint();
+                }
+                _ => {}
+            }
+        }));
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let _ = MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let _ = tx.send(UiEvent::TrayMenu(event.id().0.clone()));
+            ctx.request_repaint();
+        }));
+        self._tray_icon = Some(tray);
+    }
+
     fn save_last_played_track(&self, track: &Track) {
         let st = storage::SavedTrack {
             owner_id: track.owner_id,
@@ -963,6 +1050,12 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         });
     }
     fn handle_events(&mut self, ctx: &egui::Context) {
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested && !self.quit_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.window_hidden = true;
+        }
         while let Ok(evt) = self.ui_evt_rx.try_recv() {
             match evt {
                 UiEvent::TracksLoaded { offset, count, items } => {
@@ -1046,6 +1139,36 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
                                 UiEvent::MediaKey(kind) => {
                     self.handle_media_hotkey(kind);
+                }
+                UiEvent::TrayClick(MouseButton::Left, MouseButtonState::Up) => {
+                    let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+                    if self.window_hidden || minimized {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.window_hidden = false;
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.window_hidden = true;
+                    }
+                }
+                UiEvent::TrayClick(_, _) => {}
+                UiEvent::TrayMenu(id) => {
+                    if id == self.tray_menu_show_id {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.window_hidden = false;
+                    } else if id == self.tray_menu_playpause_id {
+                        self.handle_media_hotkey(MediaHotkey::PlayPause);
+                    } else if id == self.tray_menu_next_id {
+                        self.play_next();
+                    } else if id == self.tray_menu_quit_id {
+                        self.quit_requested = true;
+                        let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                        self._tray_icon.take();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
                 UiEvent::RestoredTrackResolved { track } => {
                     self.restored_track_pending = false;
