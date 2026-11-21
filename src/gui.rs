@@ -222,6 +222,7 @@ struct GuiAppImpl {
     fps_enabled: bool,
     fps_passes: u64,
     fps_frames: u64,
+    fps_logic: u64,
     fps_last: Instant,
     last_frame: Instant,
     egui_ctx: egui::Context,
@@ -313,6 +314,7 @@ impl GuiAppImpl {
             fps_enabled: std::env::var_os("VKMUSIC_FPS").as_deref() == Some(std::ffi::OsStr::new("1")),
             fps_passes: 0,
             fps_frames: 0,
+            fps_logic: 0,
             fps_last: Instant::now(),
             last_frame: Instant::now(),
             egui_ctx: egui_ctx.clone(),
@@ -1392,6 +1394,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
 }
 
 impl eframe::App for GuiAppImpl {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.fps_enabled {
+            self.fps_logic += 1;
+        }
+        self.handle_events(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let pass_index = ctx.current_pass_index();
@@ -1402,15 +1411,15 @@ impl eframe::App for GuiAppImpl {
             }
             self.last_frame = Instant::now();
         }
-        self.handle_events(&ctx);
         self.handle_keyboard(&ctx);
         if self.fps_enabled {
             self.fps_passes += 1;
             if pass_index == 0 { self.fps_frames += 1; }
             let elapsed = self.fps_last.elapsed();
             if elapsed >= Duration::from_secs(10) {
-                eprintln!("passes: {}, frames: {}", self.fps_passes, self.fps_frames);
-                self.fps_passes = 0; self.fps_frames = 0; self.fps_last = Instant::now();
+                let logic_only = self.fps_logic.saturating_sub(self.fps_frames);
+                eprintln!("passes: {}, frames: {}, logic: {}", self.fps_passes, self.fps_frames, logic_only);
+                self.fps_passes = 0; self.fps_frames = 0; self.fps_logic = 0; self.fps_last = Instant::now();
             }
         }
 
