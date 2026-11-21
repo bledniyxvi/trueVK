@@ -1,11 +1,12 @@
 ﻿use anyhow::{anyhow, Context, Result};
+use rodio::{Decoder, DeviceSinkBuilder, Player};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const API_VERSION: &str = "5.207";
 const API_HOST: &str = "https://api.vk.ru/method/";
@@ -16,6 +17,8 @@ const PLAYLIST_TRACK_LIMIT: usize = 10;
 const PROBE_TRACK_LIMIT: usize = 2;
 const REQUEST_TIMEOUT_SECS: u64 = 20;
 const PROBE_BYTES: usize = 16;
+const PLAY_DEFAULT_SECONDS: u64 = 20;
+const PLAY_MAX_BYTES: usize = 40 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct VkResponse<T> {
@@ -60,6 +63,8 @@ fn run() -> Result<()> {
     let probe_bytes_mode = args.iter().any(|arg| arg == "--probe-bytes");
     let search_query = arg_value(&args, "--search");
     let playlist_index = arg_value(&args, "--playlist");
+    let play_index = arg_value(&args, "--play");
+    let play_seconds = arg_value(&args, "--seconds");
 
     let token = env::var("VK_TOKEN")
         .ok()
@@ -94,6 +99,14 @@ fn run() -> Result<()> {
     }
     if let Some(index_raw) = playlist_index {
         run_playlist_tracks(&client, &token, &index_raw)?;
+        return Ok(());
+    }
+    if let Some(index_raw) = play_index {
+        let seconds = match play_seconds {
+            Some(raw) => parse_play_seconds(&raw)?,
+            None => PLAY_DEFAULT_SECONDS,
+        };
+        run_play(&client, &token, &index_raw, seconds)?;
         return Ok(());
     }
 
@@ -695,4 +708,164 @@ fn redact_urls(input: &str) -> String {
         }
     }
     out
+}
+
+fn parse_play_seconds(raw: &str) -> Result<u64> {
+    let secs: u64 = raw.parse().map_err(|_| anyhow!("invalid --seconds value"))?;
+    if secs == 0 {
+        return Err(anyhow!("--seconds must be greater than 0"));
+    }
+    Ok(secs)
+}
+
+fn run_play(client: &reqwest::blocking::Client, token: &str, index_raw: &str, seconds: u64) -> Result<()> {
+    let index: usize = index_raw.parse().map_err(|_| anyhow!("invalid --play value"))?;
+    if index == 0 {
+        return Err(anyhow!("--play index must start at 1"));
+    }
+    let response: AudioGetResponse = vk_call(
+        client,
+        token,
+        "audio.get",
+        &[("count", TRACK_LIMIT.to_string().as_str())],
+    )?;
+    let items = response.items.unwrap_or_default();
+    let item = items
+        .get(index - 1)
+        .ok_or_else(|| anyhow!("--play index out of range"))?;
+    let artist = string_field(item, "artist");
+    let title = string_field(item, "title");
+    let url = select_play_url(client, item)?;
+    let bytes = download_track_bytes(client, &url)?;
+    play_bytes(bytes, &artist, &title, seconds)
+}
+
+fn select_play_url(client: &reqwest::blocking::Client, item: &Value) -> Result<String> {
+    let main_url = item
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("no playable mp3"))?;
+    match probe_first_bytes(client, main_url) {
+        Ok(bytes) if is_mp3_bytes(&bytes) => Ok(main_url.to_string()),
+        Ok(_) | Err(_) => {
+            let streams = item
+                .get("audio_streams")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("no playable mp3"))?;
+            for stream in streams {
+                let stype = stream.get("type").and_then(Value::as_str).unwrap_or("");
+                if stype != "mp3" {
+                    continue;
+                }
+                let url = stream
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
+                if let Some(url) = url {
+                    return Ok(url.to_string());
+                }
+            }
+            Err(anyhow!("no playable mp3"))
+        }
+    }
+}
+
+fn probe_first_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
+    let mut resp = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-15")
+        .send()
+        .map_err(map_reqwest_error)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow!("request failed (status {})", status.as_u16()));
+    }
+    let mut buf = [0u8; 16];
+    let mut read_total = 0usize;
+    loop {
+        if read_total >= buf.len() {
+            break;
+        }
+        let n = resp.read(&mut buf[read_total..]).map_err(|_| anyhow!("request failed (decode)"))?;
+        if n == 0 {
+            break;
+        }
+        read_total += n;
+    }
+    Ok(buf[..read_total].to_vec())
+}
+
+fn is_mp3_bytes(bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"ID3") {
+        return true;
+    }
+    bytes.len() >= 2 && bytes[0] == 0xFF && matches!(bytes[1], 0xE2..=0xFF)
+}
+
+fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
+    println!("downloading...");
+    let start = Instant::now();
+    let mut resp = client.get(url).send().map_err(map_reqwest_error)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow!("request failed (status {})", status.as_u16()));
+    }
+    if let Some(len) = resp.content_length() {
+        if len as usize > PLAY_MAX_BYTES {
+            return Err(anyhow!("request failed (decode)"));
+        }
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(
+        resp.content_length()
+            .map(|l| (l as usize).min(PLAY_MAX_BYTES))
+            .unwrap_or(0),
+    );
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = resp.read(&mut chunk).map_err(|_| anyhow!("request failed (decode)"))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len().saturating_add(n) > PLAY_MAX_BYTES {
+            return Err(anyhow!("request failed (decode)"));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let mb = buf.len() as f64 / (1024.0 * 1024.0);
+    println!("{mb:.2} MB in {elapsed:.2}s");
+    Ok(buf)
+}
+
+fn play_bytes(bytes: Vec<u8>, artist: &str, title: &str, seconds: u64) -> Result<()> {
+    let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("request failed (decode)"))?;
+    stream.log_on_drop(false);
+    let player = Player::connect_new(&stream.mixer());
+    let decoder = Decoder::try_from(Cursor::new(bytes)).map_err(|_| anyhow!("request failed (decode)"))?;
+    player.append(decoder);
+    println!("playing: {artist} - {title}");
+    let start = Instant::now();
+    let mut next_report = Duration::from_secs(5);
+    let limit = Duration::from_secs(seconds);
+    loop {
+        let elapsed = start.elapsed();
+        if elapsed >= limit || player.empty() {
+            break;
+        }
+        if elapsed >= next_report {
+            let pos = player.get_pos().as_secs();
+            println!("{pos}s");
+            next_report += Duration::from_secs(5);
+        }
+        let remaining = limit.saturating_sub(elapsed);
+        let sleep_for = std::cmp::min(Duration::from_millis(200), remaining);
+        if sleep_for.is_zero() {
+            break;
+        }
+        std::thread::sleep(sleep_for);
+    }
+    player.stop();
+    println!("done");
+    Ok(())
 }
