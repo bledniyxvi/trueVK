@@ -262,6 +262,7 @@ struct GuiAppImpl {
     window_hidden: bool,
     quit_requested: bool,
     last_tray_tooltip: String,
+    my_filter: String,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -392,6 +393,7 @@ impl GuiAppImpl {
             window_hidden: false,
             quit_requested: false,
             last_tray_tooltip: String::new(),
+            my_filter: String::new(),
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -712,7 +714,17 @@ fn set_queue_for_my_music(&mut self) {
         let Some(track) = tracks.get(index).cloned() else { return; };
         if !track.is_playable() { return; }
         match source {
-            QueueSource::MyMusic => self.set_queue_for_my_music(),
+            QueueSource::MyMusic => {
+                if self.my_filter.trim().is_empty() {
+                    self.set_queue_for_my_music();
+                } else {
+                    let filtered: Vec<Track> = self.my_music_filtered().into_iter().map(|(_, t)| t).collect();
+                    self.queue = filtered;
+                    self.queue_source = QueueSource::MyMusic;
+                    self.queue_playlist = None;
+                    self.queue_search_query = None;
+                }
+            }
             QueueSource::Playlist => self.set_queue_for_playlist(),
             QueueSource::Search => self.set_queue_for_search(),
             QueueSource::Recommendations => self.set_queue_for_recommendations(),
@@ -864,6 +876,15 @@ fn set_queue_for_my_music(&mut self) {
             s = s.chars().take(60).collect();
         }
         s
+    }
+
+    fn my_music_filtered(&self) -> Vec<(usize, Track)> {
+        let q = self.my_filter.trim().to_lowercase();
+        self.tracks.iter().enumerate().filter(|(_, t)| {
+            if q.is_empty() { return true; }
+            let hay = format!("{} - {}", t.artist, t.title).to_lowercase();
+            hay.contains(&q)
+        }).map(|(i, t)| (i, t.clone())).collect()
     }
 
     fn build_tray(&mut self) {
@@ -1689,22 +1710,37 @@ impl eframe::App for GuiAppImpl {
             match self.active_tab {
                 Tab::MyMusic => {
                     if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }
-                    let total = self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize;
-                    let playing_tid = if self.current_playing_matches(QueueSource::MyMusic) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
-                        let width = ui.available_width();
-                        for i in range.clone() {
-                            if i >= self.tracks.len() {
-                                if !self.loading_tracks { self.request_tracks_load(); }
-                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("загрузка...").selectable(false)); });
-                                continue;
-                            }
-                            let track = self.tracks[i].clone();
-                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
-                            self.render_track_row(ui, i, &track, width, row_h, QueueSource::MyMusic, playing_here);
+                    ui.horizontal(|ui| {
+                        let hint = "\u{0424}\u{0438}\u{043B}\u{044C}\u{0442}\u{0440}";
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.my_filter).hint_text(hint).desired_width(220.0));
+                        if !self.my_filter.is_empty() && ui.small_button("x").clicked() {
+                            self.my_filter.clear();
+                            resp.request_focus();
                         }
-                        if range.end + 10 >= self.tracks.len() && !self.loading_tracks { self.request_tracks_load(); }
                     });
+                    let filter_active = !self.my_filter.trim().is_empty();
+                    let filtered = self.my_music_filtered();
+                    let total = if filter_active { filtered.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
+                    let playing_tid = if self.current_playing_matches(QueueSource::MyMusic) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                    if filter_active && filtered.is_empty() {
+                        ui.add(egui::Label::new("\u{043D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{043D}\u{0430}\u{0439}\u{0434}\u{0435}\u{043D}\u{043E}").selectable(false));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
+                            let width = ui.available_width();
+                            for row in range.clone() {
+                                let Some((i, track)) = (if filter_active { filtered.get(row).cloned() } else { self.tracks.get(row).cloned().map(|t| (row, t)) }) else {
+                                    if !filter_active && !self.loading_tracks { self.request_tracks_load(); }
+                                    if !filter_active {
+                                        ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("...").selectable(false)); });
+                                    }
+                                    continue;
+                                };
+                                let playing_here = playing_tid == Some(TrackId::from_track(&track));
+                                self.render_track_row(ui, i, &track, width, row_h, QueueSource::MyMusic, playing_here);
+                            }
+                            if !filter_active && range.end + 10 >= self.tracks.len() && !self.loading_tracks { self.request_tracks_load(); }
+                        });
+                    }
                 }
                 Tab::Playlists => {
                     if let Some(pidx) = self.selected_playlist {
