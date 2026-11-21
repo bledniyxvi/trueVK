@@ -435,7 +435,7 @@ impl GuiAppImpl {
         };
         if !need_more { return; }
         self.loading_tracks = true;
-        self.my_status = "загрузка...".to_string();
+        self.my_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         let token = self.token.clone();
         let ua = self.ua.clone();
         let offset = self.next_offset;
@@ -471,7 +471,7 @@ impl GuiAppImpl {
         };
         if !need_more { return; }
         self.loading_playlists = true;
-        self.playlists_status = "загрузка...".to_string();
+        self.playlists_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         let token = self.token.clone();
         let ua = self.ua.clone();
         let offset = self.playlists_offset;
@@ -524,7 +524,7 @@ impl GuiAppImpl {
         };
         if !need_more { return; }
         self.loading_playlist_tracks = true;
-        self.playlist_status = "загрузка...".to_string();
+        self.playlist_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         let token = self.token.clone();
         let ua = self.ua.clone();
         let offset = self.playlist_tracks_offset;
@@ -568,7 +568,7 @@ impl GuiAppImpl {
         self.search_status.clear();
         self.search_request_id = self.search_request_id.wrapping_add(1);
         if q.is_empty() {
-            self.search_status = "пустой запрос".to_string();
+            self.search_status = "\u{043F}\u{0443}\u{0441}\u{0442}\u{043E}\u{0439} \u{0437}\u{0430}\u{043F}\u{0440}\u{043E}\u{0441}".to_string();
             return;
         }
         self.request_search_load();
@@ -583,7 +583,7 @@ impl GuiAppImpl {
         };
         if !need_more { return; }
         self.loading_search = true;
-        self.search_status = "загрузка...".to_string();
+        self.search_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         let token = self.token.clone();
         let ua = self.ua.clone();
         let offset = self.search_offset;
@@ -617,7 +617,7 @@ impl GuiAppImpl {
         if self.rec_loading { return; }
         if !replace && self.rec_no_more { return; }
         self.rec_loading = true;
-        self.rec_status = "загрузка...".to_string();
+        self.rec_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         self.rec_request_id = self.rec_request_id.wrapping_add(1);
         if replace {
             self.rec_no_more = false;
@@ -646,7 +646,7 @@ impl GuiAppImpl {
         if self.rec_loading || self.rec_no_more { return; }
         if !self.rec_loaded_once { self.request_recommendations(false); return; }
         self.rec_loading = true;
-        self.rec_status = "загрузка...".to_string();
+        self.rec_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         self.rec_request_id = self.rec_request_id.wrapping_add(1);
         let request_id = self.rec_request_id;
         let replace = false;
@@ -1016,7 +1016,7 @@ fn set_queue_for_my_music(&mut self) {
         let Some(saved) = self.restored_track.clone() else { return; };
         if !self.logged_in || self.token.trim().is_empty() { return; }
         self.restored_track_pending = true;
-        self.status = "загрузка...".to_string();
+        self.status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
         let token = self.token.clone();
         let ua = self.ua.clone();
         let tx = self.ui_evt_tx.clone();
@@ -1121,7 +1121,7 @@ fn set_queue_for_my_music(&mut self) {
         }
         if added == 0 {
             self.rec_no_more = true;
-            self.rec_status = "больше нет".to_string();
+            self.rec_status = "\u{0431}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442}".to_string();
         } else {
             self.rec_status.clear();
         }
@@ -1565,9 +1565,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             }
             DeleteState::Confirm => {
                 let mut clicked_any = false;
-                let yes = ui.small_button("Да");
-                let no = ui.small_button("Нет");
-                ui.label("Удалить?");
+                let yes = ui.small_button("\u{0414}\u{0430}");
+                let no = ui.small_button("\u{041D}\u{0435}\u{0442}");
+                ui.label("\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}?");
                 if yes.clicked() {
                     clicked_any = true;
                     self.start_delete_track(track.clone());
@@ -1695,11 +1695,25 @@ impl eframe::App for GuiAppImpl {
                         let now_text = if let Some(np) = &self.now_playing {
                 format!("{} - {}", np.artist, np.title)
             } else if let Some(t) = &self.restored_track {
-                format!("{} - {} (готов)", t.artist, t.title)
+                format!("{} - {} (\u{0433}\u{043E}\u{0442}\u{043E}\u{0432})", t.artist, t.title)
             } else {
-                "Ничего не играет".to_string()
+                "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}".to_string()
             };
-            ui.add(egui::Label::new(now_text).selectable(false));
+            ui.horizontal(|ui| {
+                let repeat_w = 110.0;
+                let label_w = (ui.available_width() - repeat_w - ui.spacing().item_spacing.x).max(40.0);
+                let row_h = ui.text_style_height(&egui::TextStyle::Body);
+                ui.allocate_ui_with_layout(egui::vec2(label_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(now_text).selectable(false).truncate());
+                });
+                ui.allocate_ui_with_layout(egui::vec2(repeat_w, row_h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let rep_label = format!("\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: {}", self.repeat_mode.label());
+                    if ui.small_button(rep_label).clicked() {
+                        self.repeat_mode = self.repeat_mode.next();
+                        storage::save_repeat(self.repeat_mode.as_str());
+                    }
+                });
+            });
             ui.horizontal(|ui| {
                 let pos = self.now_playing.as_ref().map(|np| np.position_secs()).unwrap_or(0);
                 let dur = self.now_playing.as_ref().and_then(|np| np.duration_secs).unwrap_or(pos.max(1));
@@ -1739,20 +1753,18 @@ impl eframe::App for GuiAppImpl {
                 if ui.button("Next").clicked() { self.play_next(); }
                 if ui.button("Stop").clicked() { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
+                    ui.add(egui::Label::new(format!("{pct}%")).selectable(false));
+                    ui.add(egui::Label::new("\u{0413}\u{0440}\u{043E}\u{043C}\u{043A}.").selectable(false));
+                    let slider_w = (ui.available_width() - 2.0).max(40.0);
+                    let old_slider_w = ui.spacing().slider_width;
+                    ui.spacing_mut().slider_width = slider_w;
                     let vol_resp = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
+                    ui.spacing_mut().slider_width = old_slider_w;
                     if vol_resp.changed() || vol_resp.drag_stopped() {
                         self.volume = self.volume.clamp(0.0, 1.0);
                         let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
                         storage::save_volume(self.volume);
-                    }
-                    let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
-                    ui.add(egui::Label::new(format!("{pct}%")).selectable(false));
-                    ui.add(egui::Label::new("D\"??D_D?D?D_???,?O").selectable(false));
-                    ui.separator();
-                    let rep_label = format!("\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: {}", self.repeat_mode.label());
-                    if ui.small_button(rep_label).clicked() {
-                        self.repeat_mode = self.repeat_mode.next();
-                        storage::save_repeat(self.repeat_mode.as_str());
                     }
                 });
             });
@@ -1774,10 +1786,10 @@ impl eframe::App for GuiAppImpl {
             self.ensure_my_user_id();
 
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "Моя музыка");
-                ui.selectable_value(&mut self.active_tab, Tab::Playlists, "Плейлисты");
-                ui.selectable_value(&mut self.active_tab, Tab::Search, "Поиск");
-                ui.selectable_value(&mut self.active_tab, Tab::Recommendations, "Рекомендации");
+                ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "\u{041C}\u{043E}\u{044F} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0430}");
+                ui.selectable_value(&mut self.active_tab, Tab::Playlists, "\u{041F}\u{043B}\u{0435}\u{0439}\u{043B}\u{0438}\u{0441}\u{0442}\u{044B}");
+                ui.selectable_value(&mut self.active_tab, Tab::Search, "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A}");
+                ui.selectable_value(&mut self.active_tab, Tab::Recommendations, "\u{0420}\u{0435}\u{043A}\u{043E}\u{043C}\u{0435}\u{043D}\u{0434}\u{0430}\u{0446}\u{0438}\u{044F}");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Log out").clicked() {
                         self.logout_to_login(None);
@@ -1826,7 +1838,7 @@ impl eframe::App for GuiAppImpl {
                     if let Some(pidx) = self.selected_playlist {
                         let pl_title = self.playlists.get(pidx).map(|p| p.title.clone()).unwrap_or_default();
                         ui.horizontal(|ui| {
-                            if ui.button("Назад").clicked() {
+                            if ui.button("\u{041D}\u{0430}\u{0437}\u{0430}\u{0434}").clicked() {
                                 self.selected_playlist = None;
                                 self.selected_index = None;
                                 return;
@@ -1842,7 +1854,7 @@ impl eframe::App for GuiAppImpl {
                                 for i in range.clone() {
                                     if i >= self.playlist_tracks.len() {
                                         if !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
-                                        ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("загрузка...").selectable(false)); });
+                                        ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
                                         continue;
                                     }
                                     let track = self.playlist_tracks[i].clone();
@@ -1863,7 +1875,7 @@ impl eframe::App for GuiAppImpl {
                             for i in range.clone() {
                                 if i >= self.playlists.len() {
                                     if !self.loading_playlists { self.request_playlists_load(); }
-                                    ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("загрузка...").selectable(false)); });
+                                    ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
                                     continue;
                                 }
                                 let pl = self.playlists[i].clone();
@@ -1884,7 +1896,7 @@ impl eframe::App for GuiAppImpl {
                     ui.horizontal(|ui| {
                         let resp = ui.add(egui::TextEdit::singleline(&mut self.search_input).desired_width(ui.available_width() - 80.0));
                         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button("Найти").clicked() || enter {
+                        if ui.button("\u{041D}\u{0430}\u{0439}\u{0442}\u{0438}").clicked() || enter {
                             self.start_search();
                         }
                     });
@@ -1896,7 +1908,7 @@ impl eframe::App for GuiAppImpl {
                         for i in range.clone() {
                             if i >= self.search_tracks.len() {
                                 if !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
-                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("загрузка...").selectable(false)); });
+                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
                                 continue;
                             }
                             let track = self.search_tracks[i].clone();
@@ -1911,11 +1923,11 @@ impl eframe::App for GuiAppImpl {
                         self.request_recommendations(false);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Обновить").clicked() && !self.rec_loading {
+                        if ui.button("\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}").clicked() && !self.rec_loading {
                             self.request_recommendations(true);
                         }
                         if self.rec_loading {
-                            ui.add(egui::Label::new("загрузка...").selectable(false));
+                            ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false));
                         }
                     });
                     if !self.rec_status.is_empty() {
@@ -1928,7 +1940,7 @@ impl eframe::App for GuiAppImpl {
                         let width = ui.available_width();
                         for i in range.clone() {
                             if i >= self.rec_tracks.len() {
-                                let label = if self.rec_no_more { "больше нет" } else { "загрузка..." };
+                                let label = if self.rec_no_more { "\u{0431}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442}" } else { "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}..." };
                                 if !self.rec_no_more && !self.rec_loading && self.rec_loaded_once {
                                     self.request_recommendations_more();
                                 }
