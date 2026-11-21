@@ -128,8 +128,3 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 - `assets/` — иконки и шрифты.
 - `installer/` — скрипт сборки установщика и файл проекта Inno Setup.
 
-</details>
-
-## Лицензия
-
-Лицензия на код не указана. Шрифты в `assets/fonts` распространяются по SIL Open Font License; тексты лицензий лежат рядом с файлами шрифтов.
