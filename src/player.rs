@@ -108,7 +108,7 @@ fn worker_loop(
                     let pos = match s.player.try_seek(target) {
                         Ok(()) => target,
                         Err(_) => {
-                            eprintln!("try_seek failed");
+                            crate::log_status_error("try_seek failed");
                             let decoder = match make_decoder(Arc::clone(&s.bytes)) {
                                 Ok(d) => d,
                                 Err(_) => {

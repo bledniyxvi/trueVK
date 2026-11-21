@@ -1913,7 +1913,7 @@ impl eframe::App for GuiAppImpl {
             let elapsed = self.fps_last.elapsed();
             if elapsed >= Duration::from_secs(10) {
                 let logic_only = self.fps_logic.saturating_sub(self.fps_frames);
-                eprintln!("passes: {}, frames: {}, logic: {}", self.fps_passes, self.fps_frames, logic_only);
+                crate::log_fps_line(&format!("passes: {}, frames: {}, logic: {}", self.fps_passes, self.fps_frames, logic_only));
                 self.fps_passes = 0; self.fps_frames = 0; self.fps_logic = 0; self.fps_last = Instant::now();
             }
         }

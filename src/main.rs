@@ -1,10 +1,11 @@
-﻿use anyhow::{anyhow, Result};
+﻿#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,14 @@ const PLAYLIST_TRACK_LIMIT: usize = 10;
 const PROBE_TRACK_LIMIT: usize = 2;
 const PROBE_BYTES: usize = 16;
 const CRASH_LOG_MAX_BYTES: u64 = 200 * 1024;
+const FPS_LOG_MAX_BYTES: u64 = 100 * 1024;
+
+macro_rules! safe_println {
+    ($($arg:tt)*) => {{
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+    }};
+}
 
 fn install_crash_logging() {
     prepare_crash_log();
@@ -39,20 +48,28 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn crash_log_path() -> Option<std::path::PathBuf> {
+fn log_path(name: &str) -> Option<PathBuf> {
     let appdata = env::var_os("APPDATA")?;
-    let dir = std::path::PathBuf::from(appdata).join("vkmusic");
+    let dir = PathBuf::from(appdata).join("vkmusic");
     fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("crash.log"))
+    Some(dir.join(name))
+}
+
+fn crash_log_path() -> Option<PathBuf> {
+    log_path("crash.log")
+}
+
+fn fps_log_path() -> Option<PathBuf> {
+    log_path("fps.log")
 }
 
 fn prepare_crash_log() {
     if let Some(path) = crash_log_path() {
-        trim_crash_log(&path);
+        trim_log(&path, CRASH_LOG_MAX_BYTES);
     }
 }
 
-fn trim_crash_log(path: &Path) {
+fn trim_log(path: &Path, max_bytes: u64) {
     let mut file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(_) => return,
@@ -61,8 +78,8 @@ fn trim_crash_log(path: &Path) {
         Ok(meta) => meta.len(),
         Err(_) => return,
     };
-    if len <= CRASH_LOG_MAX_BYTES { return; }
-    let keep_from = len.saturating_sub(CRASH_LOG_MAX_BYTES / 2);
+    if len <= max_bytes { return; }
+    let keep_from = len.saturating_sub(max_bytes / 2);
     if file.seek(SeekFrom::Start(keep_from)).is_err() { return; }
     let mut tail = Vec::new();
     if file.read_to_end(&mut tail).is_err() { return; }
@@ -94,14 +111,32 @@ fn append_crash_log_line(line: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(file, "{ts} {one_line}");
     }
-    trim_crash_log(&path);
+    trim_log(&path, CRASH_LOG_MAX_BYTES);
+}
+
+pub(crate) fn log_fps_line(line: &str) {
+    let path = match fps_log_path() {
+        Some(path) => path,
+        None => return,
+    };
+    let one_line: String = line
+        .chars()
+        .take(240)
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    if one_line.trim().is_empty() { return; }
+    let ts = now_secs();
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "{ts} {one_line}");
+    }
+    trim_log(&path, FPS_LOG_MAX_BYTES);
 }
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {}", api::sanitize_output(&format!("{err:#}")));
+            log_status_error(&format!("fatal: {err:#}"));
             ExitCode::from(1)
         }
     }
@@ -236,7 +271,7 @@ fn run_playlists(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
         let title = api::string_field(item, "title");
         let track_count = count_field(item);
         let keys = object_keys(item);
-        println!("{title} | tracks: {track_count} | keys: {keys}");
+        safe_println!("{title} | tracks: {track_count} | keys: {keys}");
     }
     Ok(())
 }
@@ -257,7 +292,7 @@ fn fetch_playlists(client: &reqwest::blocking::Client, token: &str) -> Result<Ve
 }
 
 fn run_probe(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
-    println!("Classifier: m3u8 if url contains \".m3u8\" (case-insensitive); mp3/other if url contains \".mp3\"; otherwise mp3/other; no url if url missing/empty/not string.");
+    safe_println!("Classifier: m3u8 if url contains \".m3u8\" (case-insensitive); mp3/other if url contains \".mp3\"; otherwise mp3/other; no url if url missing/empty/not string.");
     let response: AudioGetResponse = api::vk_call(
         client,
         token,
@@ -274,26 +309,26 @@ fn run_probe(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
         let streams_info = audio_streams_shape(item.get("audio_streams"));
         let combo = format!("kind={kind},url_m3u8={},streams={}", url_info.contains_m3u8, streams_info.count);
         *combos.entry(combo).or_insert(0) += 1;
-        println!("Track {}: {} - {}", idx + 1, artist, title);
-        println!("  kind: {kind}");
-        println!("  url.empty: {}", url_info.empty);
-        println!("  url.contains_m3u8: {}", url_info.contains_m3u8);
-        println!("  url.host: {}", url_info.host);
-        println!("  url.last_path_ext: {}", url_info.last_path_ext);
-        println!("  url.query_params: {}", url_info.query_params);
-        println!("  url.length: {}", url_info.length);
-        println!("  audio_streams.count: {}", streams_info.count);
+        safe_println!("Track {}: {} - {}", idx + 1, artist, title);
+        safe_println!("  kind: {kind}");
+        safe_println!("  url.empty: {}", url_info.empty);
+        safe_println!("  url.contains_m3u8: {}", url_info.contains_m3u8);
+        safe_println!("  url.host: {}", url_info.host);
+        safe_println!("  url.last_path_ext: {}", url_info.last_path_ext);
+        safe_println!("  url.query_params: {}", url_info.query_params);
+        safe_println!("  url.length: {}", url_info.length);
+        safe_println!("  audio_streams.count: {}", streams_info.count);
         for (sidx, stream) in streams_info.items.iter().enumerate() {
-            println!("  audio_streams[{sidx}].type: {}", stream.type_value);
-            println!("  audio_streams[{sidx}].url_empty: {}", stream.url_empty);
-            println!("  audio_streams[{sidx}].contains_m3u8: {}", stream.contains_m3u8);
-            println!("  audio_streams[{sidx}].fallback_url_empty: {}", stream.fallback_url_empty);
-            println!("  audio_streams[{sidx}].fallback_equals_url: {}", stream.fallback_equals_url);
+            safe_println!("  audio_streams[{sidx}].type: {}", stream.type_value);
+            safe_println!("  audio_streams[{sidx}].url_empty: {}", stream.url_empty);
+            safe_println!("  audio_streams[{sidx}].contains_m3u8: {}", stream.contains_m3u8);
+            safe_println!("  audio_streams[{sidx}].fallback_url_empty: {}", stream.fallback_url_empty);
+            safe_println!("  audio_streams[{sidx}].fallback_equals_url: {}", stream.fallback_equals_url);
         }
     }
-    println!("Summary:");
+    safe_println!("Summary:");
     for (combo, count) in combos {
-        println!("  {combo} => {count}");
+        safe_println!("  {combo} => {count}");
     }
     Ok(())
 }
@@ -310,13 +345,13 @@ fn run_probe_bytes(client: &reqwest::blocking::Client, token: &str) -> Result<()
         let track_n = idx + 1;
         let artist = api::string_field(item, "artist");
         let title = api::string_field(item, "title");
-        println!("track {track_n} | meta | {artist} - {title}");
+        safe_println!("track {track_n} | meta | {artist} - {title}");
         print_expires_remaining(item);
 
         if let Some(url) = item.get("url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
             probe_one(client, track_n, "main", url);
         } else {
-            println!("track {track_n} | main | request failed (missing url)");
+            safe_println!("track {track_n} | main | request failed (missing url)");
         }
 
         if let Some(streams) = item.get("audio_streams").and_then(Value::as_array) {
@@ -325,16 +360,16 @@ fn run_probe_bytes(client: &reqwest::blocking::Client, token: &str) -> Result<()
                 if let Some(url) = stream.get("url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                     probe_one(client, track_n, &format!("{stype} url"), url);
                 } else {
-                    println!("track {track_n} | {stype} url | request failed (missing url)");
+                    safe_println!("track {track_n} | {stype} url | request failed (missing url)");
                 }
                 if let Some(fb) = stream.get("fallback_url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                     probe_one(client, track_n, &format!("{stype} fallback"), fb);
                 } else {
-                    println!("track {track_n} | {stype} fallback | request failed (missing url)");
+                    safe_println!("track {track_n} | {stype} fallback | request failed (missing url)");
                 }
             }
         } else {
-            println!("track {track_n} | audio_streams | request failed (missing audio_streams)");
+            safe_println!("track {track_n} | audio_streams | request failed (missing audio_streams)");
         }
     }
     Ok(())
@@ -352,8 +387,8 @@ fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
         let _ = SetConsoleOutputCP(65001);
     }
 
-    println!("Probe-mix: read-only audio.getRecommendations checks. No token/URLs printed.");
-    println!("Source: vodka2/vk-audio-token src/examples/usage/example_kate.php shows audio.getRecommendations with count,v. dev.vk.com pages JS-rendered; no reliable extra params extracted. Not inventing params.");
+    safe_println!("Probe-mix: read-only audio.getRecommendations checks. No token/URLs printed.");
+    safe_println!("Source: vodka2/vk-audio-token src/examples/usage/example_kate.php shows audio.getRecommendations with count,v. dev.vk.com pages JS-rendered; no reliable extra params extracted. Not inventing params.");
 
     let base: AudioGetResponse = api::vk_call(
         client,
@@ -363,23 +398,23 @@ fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
     )?;
     let base_items = base.items.unwrap_or_default();
     let base_ids: HashSet<String> = base_items.iter().filter_map(track_id).collect();
-    println!("audio.get first page: count={} ids={}", base_items.len(), base_ids.len());
+    safe_println!("audio.get first page: count={} ids={}", base_items.len(), base_ids.len());
 
     // 1) Three calls in a row, count=10, overlap 1-2,2-3,1-3.
-    println!("--- three_calls_count_10 ---");
+    safe_println!("--- three_calls_count_10 ---");
     let mut calls: Vec<Vec<Value>> = Vec::new();
     for i in 0..3 {
         let resp = api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]);
         match resp {
             Ok(v) => {
                 let items = extract_items(&v);
-                println!("call{} ok=true items={}", i + 1, items.len());
+                safe_println!("call{} ok=true items={}", i + 1, items.len());
                 calls.push(items);
             }
             Err(e) => {
                 let msg = api::sanitize_output(&format!("{e:#}"));
                 let (code, emsg) = parse_vk_error_fields(&msg);
-                println!("call{} ok=false error_code={} error_msg={}", i + 1, code, emsg);
+                safe_println!("call{} ok=false error_code={} error_msg={}", i + 1, code, emsg);
                 calls.push(Vec::new());
             }
         }
@@ -387,42 +422,42 @@ fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
     let ids0: HashSet<String> = calls.get(0).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
     let ids1: HashSet<String> = calls.get(1).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
     let ids2: HashSet<String> = calls.get(2).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
-    println!("overlap_call1_call2: {}", ids0.intersection(&ids1).count());
-    println!("overlap_call2_call3: {}", ids1.intersection(&ids2).count());
-    println!("overlap_call1_call3: {}", ids0.intersection(&ids2).count());
+    safe_println!("overlap_call1_call2: {}", ids0.intersection(&ids1).count());
+    safe_println!("overlap_call2_call3: {}", ids1.intersection(&ids2).count());
+    safe_println!("overlap_call1_call3: {}", ids0.intersection(&ids2).count());
 
     // 2) count=50, items count and unique ids.
-    println!("--- count_50 ---");
+    safe_println!("--- count_50 ---");
     match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "50")]) {
         Ok(v) => {
             let items = extract_items(&v);
             let unique: HashSet<String> = items.iter().filter_map(track_id).collect();
-            println!("ok=true items={} unique_ids={}", items.len(), unique.len());
+            safe_println!("ok=true items={} unique_ids={}", items.len(), unique.len());
         }
         Err(e) => {
             let msg = api::sanitize_output(&format!("{e:#}"));
             let (code, emsg) = parse_vk_error_fields(&msg);
-            println!("ok=false error_code={} error_msg={} items=0 unique_ids=0", code, emsg);
+            safe_println!("ok=false error_code={} error_msg={} items=0 unique_ids=0", code, emsg);
         }
     }
 
     // 3) count=10 offset=10, overlap with call 1.
-    println!("--- count_10_offset_10 ---");
+    safe_println!("--- count_10_offset_10 ---");
     match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10"), ("offset", "10")]) {
         Ok(v) => {
             let items = extract_items(&v);
             let off_ids: HashSet<String> = items.iter().filter_map(track_id).collect();
-            println!("ok=true items={} overlap_with_call1={}", items.len(), off_ids.intersection(&ids0).count());
+            safe_println!("ok=true items={} overlap_with_call1={}", items.len(), off_ids.intersection(&ids0).count());
         }
         Err(e) => {
             let msg = api::sanitize_output(&format!("{e:#}"));
             let (code, emsg) = parse_vk_error_fields(&msg);
-            println!("ok=false error_code={} error_msg={}", code, emsg);
+            safe_println!("ok=false error_code={} error_msg={}", code, emsg);
         }
     }
 
     // 4) Top-level keys of response object (not only items).
-    println!("--- response_top_level_keys ---");
+    safe_println!("--- response_top_level_keys ---");
     match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]) {
         Ok(v) => {
             match &v {
@@ -430,26 +465,26 @@ fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
                     let mut keys: Vec<&String> = obj.keys().collect();
                     keys.sort();
                     let joined = keys.into_iter().map(String::as_str).collect::<Vec<_>>().join(",");
-                    println!("ok=true top_level_keys={}", joined);
+                    safe_println!("ok=true top_level_keys={}", joined);
                 }
                 Value::Array(_) => {
-                    println!("ok=true top_level_keys=<array_response>");
+                    safe_println!("ok=true top_level_keys=<array_response>");
                 }
                 _ => {
-                    println!("ok=true top_level_keys=<non_object>");
+                    safe_println!("ok=true top_level_keys=<non_object>");
                 }
             }
             let items = extract_items(&v);
             for (i, item) in items.iter().take(5).enumerate() {
                 let artist = api::string_field(item, "artist");
                 let title = api::string_field(item, "title");
-                println!("top{}: {} - {}", i + 1, artist, title);
+                safe_println!("top{}: {} - {}", i + 1, artist, title);
             }
         }
         Err(e) => {
             let msg = api::sanitize_output(&format!("{e:#}"));
             let (code, emsg) = parse_vk_error_fields(&msg);
-            println!("ok=false error_code={} error_msg={}", code, emsg);
+            safe_println!("ok=false error_code={} error_msg={}", code, emsg);
         }
     }
 
@@ -489,18 +524,18 @@ fn print_expires_remaining(item: &Value) {
         .and_then(Value::as_str)
         .and_then(|u| reqwest::Url::parse(u).ok())
         .and_then(|u| u.query_pairs().find(|(k, _)| k == "expires").map(|(_, v)| v.to_string()));
-    let Some(raw) = expires else { println!("  expires_hours_remaining: <missing>"); return; };
-    let Ok(mut secs) = raw.parse::<i64>() else { println!("  expires_hours_remaining: <invalid>"); return; };
+    let Some(raw) = expires else { safe_println!("  expires_hours_remaining: <missing>"); return; };
+    let Ok(mut secs) = raw.parse::<i64>() else { safe_println!("  expires_hours_remaining: <invalid>"); return; };
     if secs > 1_000_000_000_000 { secs /= 1000; }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let hours = ((secs - now) as f64 / 3600.0 * 100.0).round() / 100.0;
-    println!("  expires_hours_remaining: {hours}");
+    safe_println!("  expires_hours_remaining: {hours}");
 }
 
 fn probe_one(client: &reqwest::blocking::Client, track_n: usize, source: &str, url: &str) {
     let resp = match client.get(url).header(reqwest::header::RANGE, "bytes=0-15").send() {
         Ok(r) => r,
-        Err(e) => { println!("track {track_n} | {source} | {}", api::sanitize_output(&short_reqwest_error(e))); return; }
+        Err(e) => { safe_println!("track {track_n} | {source} | {}", api::sanitize_output(&short_reqwest_error(e))); return; }
     };
     let status = resp.status().as_u16();
     let content_type = header_str(resp.headers(), "content-type");
@@ -517,14 +552,14 @@ fn probe_one(client: &reqwest::blocking::Client, track_n: usize, source: &str, u
             Ok(0) => break,
             Ok(n) => read_total += n,
             Err(e) => {
-                println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | <read-error:{}> | unknown", api::sanitize_output(&e.to_string()));
+                safe_println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | <read-error:{}> | unknown", api::sanitize_output(&e.to_string()));
                 return;
             }
         }
     }
     let hex = bytes_hex(&buf[..read_total]);
     let guess = format_guess(&buf[..read_total]);
-    println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | {hex} | {guess}");
+    safe_println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | {hex} | {guess}");
 }
 
 fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> String {
@@ -574,7 +609,7 @@ fn run_search(client: &reqwest::blocking::Client, token: &str, query: &str) -> R
         let title = api::string_field(item, "title");
         let duration = duration_field(item, "duration");
         let kind = url_kind(item);
-        println!("{artist} - {title} [{duration}] ({kind})");
+        safe_println!("{artist} - {title} [{duration}] ({kind})");
     }
     Ok(())
 }
@@ -601,29 +636,29 @@ fn run_playlist_tracks(client: &reqwest::blocking::Client, token: &str, index_ra
         let title = api::string_field(item, "title");
         let duration = duration_field(item, "duration");
         let kind = url_kind(item);
-        println!("{artist} - {title} [{duration}] ({kind})");
+        safe_println!("{artist} - {title} [{duration}] ({kind})");
     }
     Ok(())
 }
 
 fn print_tracks(count: Option<u64>, items: &[Value]) {
-    match count { Some(c) => println!("Total: {c}"), None => println!("Total: <missing>") }
+    match count { Some(c) => safe_println!("Total: {c}"), None => safe_println!("Total: <missing>") }
     for item in items.iter().take(TRACK_LIMIT) {
         let artist = api::string_field(item, "artist");
         let title = api::string_field(item, "title");
         let duration = duration_field(item, "duration");
         let kind = url_kind(item);
-        println!("{artist} - {title} [{duration}]  ({kind})");
+        safe_println!("{artist} - {title} [{duration}]  ({kind})");
     }
 }
 
 fn print_shape(items: &[Value]) -> Result<()> {
-    let Some(first) = items.first() else { println!("No tracks in response; nothing to show shape for."); return Ok(()); };
-    let Some(obj) = first.as_object() else { println!("First track is not a JSON object: {}", value_type(first)); return Ok(()); };
-    println!("First track shape:");
+    let Some(first) = items.first() else { safe_println!("No tracks in response; nothing to show shape for."); return Ok(()); };
+    let Some(obj) = first.as_object() else { safe_println!("First track is not a JSON object: {}", value_type(first)); return Ok(()); };
+    safe_println!("First track shape:");
     let mut keys: Vec<&String> = obj.keys().collect();
     keys.sort();
-    for key in keys { let value = &obj[key]; println!("{}: {}", key, describe_shape(value)); }
+    for key in keys { let value = &obj[key]; safe_println!("{}: {}", key, describe_shape(value)); }
     Ok(())
 }
 
@@ -726,7 +761,7 @@ fn run_play(client: &reqwest::blocking::Client, token: &str, index_raw: &str, se
     let item = items.get(index - 1).ok_or_else(|| anyhow!("--play index out of range"))?;
     let track = Track::from_value(item);
     let url = select_play_url_cli(client, item)?;
-    println!("playing: {} - {}", track.artist, track.title);
+    safe_println!("playing: {} - {}", track.artist, track.title);
     let bytes = download_track_bytes_cli(client, &url)?;
     match seconds {
         Some(s) => play_bytes_cli(bytes, s),
@@ -772,13 +807,13 @@ fn is_mp3_bytes_cli(bytes: &[u8]) -> bool {
 }
 
 fn download_track_bytes_cli(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
-    println!("downloading...");
+    safe_println!("downloading...");
     let start = Instant::now();
     let mut resp = client.get(url).send().map_err(api::map_reqwest_error)?;
     let status = resp.status();
     if !status.is_success() { return Err(anyhow!("request failed (status {})", status.as_u16())); }
     let content_length = resp.content_length();
-    println!("Content-Length: {}", content_length.map(|v| v.to_string()).unwrap_or_else(|| "<missing>".to_string()));
+    safe_println!("Content-Length: {}", content_length.map(|v| v.to_string()).unwrap_or_else(|| "<missing>".to_string()));
     if let Some(len) = content_length { if len as usize > api::PLAY_MAX_BYTES { return Err(anyhow!("request failed (decode)")); } }
     let mut buf: Vec<u8> = Vec::with_capacity(content_length.map(|l| (l as usize).min(api::PLAY_MAX_BYTES)).unwrap_or(0));
     let mut chunk = [0u8; 64 * 1024];
@@ -789,12 +824,12 @@ fn download_track_bytes_cli(client: &reqwest::blocking::Client, url: &str) -> Re
         buf.extend_from_slice(&chunk[..n]);
     }
     let bytes_read = buf.len();
-    println!("bytes read: {bytes_read}");
-    println!("Vec len: {bytes_read}");
+    safe_println!("bytes read: {bytes_read}");
+    safe_println!("Vec len: {bytes_read}");
     if let Some(len) = content_length { if bytes_read != len as usize { return Err(anyhow!("request failed (decode)")); } }
     let elapsed = start.elapsed().as_secs_f64();
     let mb = buf.len() as f64 / (1024.0 * 1024.0);
-    println!("{mb:.2} MB in {elapsed:.2}s");
+    safe_println!("{mb:.2} MB in {elapsed:.2}s");
     Ok(buf)
 }
 
@@ -814,7 +849,7 @@ fn play_bytes_cli(bytes: Vec<u8>, seconds: u64) -> Result<()> {
         if elapsed >= limit || player.empty() { break; }
         if elapsed >= next_report {
             let pos = player.get_pos().as_secs();
-            println!("{pos}s");
+            safe_println!("{pos}s");
             next_report += Duration::from_secs(5);
         }
         let remaining = limit.saturating_sub(elapsed);
@@ -823,7 +858,7 @@ fn play_bytes_cli(bytes: Vec<u8>, seconds: u64) -> Result<()> {
         std::thread::sleep(sleep_for);
     }
     player.stop();
-    println!("done");
+    safe_println!("done");
     Ok(())
 }
 
@@ -851,7 +886,7 @@ fn play_interactive_cli(bytes: Vec<u8>) -> Result<()> {
             let pos_s = pos.as_secs();
             if pos_s > 0 && pos_s % 5 == 0 && pos.subsec_millis() < 250 {
                 let dur = total_duration.map(|d| d.as_secs().to_string()).unwrap_or_else(|| "?".to_string());
-                println!("{pos_s} / {dur}");
+                safe_println!("{pos_s} / {dur}");
                 std::thread::sleep(Duration::from_millis(260));
             }
             if reporter_player.empty() { break; }
@@ -872,10 +907,10 @@ fn play_interactive_cli(bytes: Vec<u8>) -> Result<()> {
                 print_state_cli(playing, player.get_pos(), total_duration, player.volume());
             }
             "s" => {
-                let Some(arg) = parts.next() else { println!("unknown"); continue; };
-                let Ok(sec) = arg.parse::<u64>() else { println!("unknown"); continue; };
+                let Some(arg) = parts.next() else { safe_println!("unknown"); continue; };
+                let Ok(sec) = arg.parse::<u64>() else { safe_println!("unknown"); continue; };
                 let target = Duration::from_secs(sec);
-                let decoder = match Decoder::try_from(Cursor::new(bytes.as_ref().clone())) { Ok(d) => d, Err(_) => { println!("request failed (decode)"); continue; } };
+                let decoder = match Decoder::try_from(Cursor::new(bytes.as_ref().clone())) { Ok(d) => d, Err(_) => { safe_println!("request failed (decode)"); continue; } };
                 let source = decoder.skip_duration(target);
                 player.clear();
                 player.append(source);
@@ -883,24 +918,24 @@ fn play_interactive_cli(bytes: Vec<u8>) -> Result<()> {
                 print_state_cli(playing, player.get_pos(), total_duration, player.volume());
             }
             "v" => {
-                let Some(arg) = parts.next() else { println!("unknown"); continue; };
-                let Ok(vol) = arg.parse::<f32>() else { println!("unknown"); continue; };
-                if !(0.0..=1.5).contains(&vol) { println!("unknown"); continue; }
+                let Some(arg) = parts.next() else { safe_println!("unknown"); continue; };
+                let Ok(vol) = arg.parse::<f32>() else { safe_println!("unknown"); continue; };
+                if !(0.0..=1.5).contains(&vol) { safe_println!("unknown"); continue; }
                 player.set_volume(vol);
                 print_state_cli(playing, player.get_pos(), total_duration, player.volume());
             }
             "h" => {
-                println!("p pause/resume | s <sec> seek | v <x> volume 0.0..1.5 | h help | q quit");
+                safe_println!("p pause/resume | s <sec> seek | v <x> volume 0.0..1.5 | h help | q quit");
                 print_state_cli(playing, player.get_pos(), total_duration, player.volume());
             }
             "q" => break,
-            _ => println!("unknown"),
+            _ => safe_println!("unknown"),
         }
     }
     stop.store(true, Ordering::Relaxed);
     player.stop();
     let _ = reporter.join();
-    println!("done");
+    safe_println!("done");
     Ok(())
 }
 
@@ -908,5 +943,5 @@ fn print_state_cli(playing: bool, pos: Duration, total: Option<Duration>, volume
     let state = if playing { "playing" } else { "paused" };
     let pos_s = pos.as_secs();
     let dur_s = total.map(|d| d.as_secs().to_string()).unwrap_or_else(|| "?".to_string());
-    println!("state: {state}, pos: {pos_s}s, duration: {dur_s}s, volume: {volume:.2}");
+    safe_println!("state: {state}, pos: {pos_s}s, duration: {dur_s}s, volume: {volume:.2}");
 }
