@@ -12,7 +12,7 @@ Features, in priority order:
 3. Playback: play/pause/next/prev/seek/volume.
 4. Media keys, tray icon, remember last track and volume.
 
-Hard limits: ~0% CPU while playing, RAM < 60 MB. No Electron/Tauri/webview.
+Targets: ~0% CPU while playing and idle (never repaint continuously; repaint only on input events or when the playback position text changes, at most once per second). RAM: much lighter than the VK browser tab, soft target under ~150 MB. No Electron/Tauri/webview.
 Minimal dependencies. GUI only in Stage 3 (eframe/egui glow, repaint only on events).
 
 Stages (STOP after each): 1) CLI list [done]; 1.5) probes [done]; 2a) play one mp3
@@ -32,6 +32,6 @@ Verified facts (probe): audio.get `url` is a plain mp3 (ID3, audio/mpeg, ~320 kb
 audio_streams except as a fallback (type "mp3"). Never use flac/aac/dash/hls.
 
 Memory and disk: audio is streamed into memory only. Never write audio (or partial
-data) to disk: no cache, no temp files. Keep only compressed mp3 bytes in RAM, at
-most the current and next track. Never decode a whole track into a PCM buffer;
+data) to disk: no cache, no temp files. Keep only compressed mp3 bytes in RAM,
+current track plus optionally the next one. Never decode a whole track into a PCM buffer;
 decode as a stream.
