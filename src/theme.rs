@@ -2,7 +2,7 @@ use eframe::egui;
 use std::path::Path;
 use std::sync::Arc;
 
-pub const APP_NAME: &str = "vkmusic";
+pub const APP_NAME: &str = "trueVK";
 
 pub const BG: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x0B, 0x0F);
 pub const PANEL: egui::Color32 = egui::Color32::from_rgb(0x10, 0x10, 0x15);

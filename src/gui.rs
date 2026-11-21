@@ -623,12 +623,15 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instanc
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PlayerCmd>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
     let (ui_evt_tx, ui_evt_rx) = std::sync::mpsc::channel::<UiEvent>();
+    let window_icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("embedded icon.png is valid");
 
     let mut options = eframe::NativeOptions::default();
     options.glow_options.vsync = true;
     options.viewport = options
         .viewport
         .with_title(theme::APP_NAME)
+        .with_icon(window_icon)
         .with_inner_size([720.0, 640.0])
         .with_min_inner_size([640.0, 480.0]);
     eframe::run_native(
@@ -826,24 +829,8 @@ struct GuiAppImpl {
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
-    let size: u32 = 32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    let c = size as f32 / 2.0;
-    let r = size as f32 / 2.0 - 1.0;
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 + 0.5 - c;
-            let dy = y as f32 + 0.5 - c;
-            if dx * dx + dy * dy <= r * r {
-                let i = ((y * size + x) * 4) as usize;
-                rgba[i] = theme::ACCENT.r();
-                rgba[i + 1] = theme::ACCENT.g();
-                rgba[i + 2] = theme::ACCENT.b();
-                rgba[i + 3] = 0xff;
-            }
-        }
-    }
-    Ok(TrayIconImage::from_rgba(rgba, size, size)?)
+    let rgba = include_bytes!("../assets/icon_256.rgba").to_vec();
+    Ok(TrayIconImage::from_rgba(rgba, 256, 256)?)
 }
 
 impl GuiAppImpl {
@@ -1222,7 +1209,7 @@ impl GuiAppImpl {
             self.status = REC_NO_SUITABLE_TRACKS_TEXT.to_string();
             self.rec_status = REC_NO_SUITABLE_TRACKS_TEXT.to_string();
             self.now_playing = None;
-            self.sync_tray_tooltip("vkmusic");
+            self.sync_tray_tooltip(theme::APP_NAME);
             return;
         }
         self.rec_waiting_next = true;
@@ -1445,7 +1432,7 @@ fn set_queue_for_my_music(&mut self) {
                 self.play_track_id(cur);
             } else {
                 self.now_playing = None;
-                self.sync_tray_tooltip("vkmusic");
+                self.sync_tray_tooltip(theme::APP_NAME);
             }
             return;
         }
@@ -1485,7 +1472,7 @@ fn set_queue_for_my_music(&mut self) {
             }
         }
         self.now_playing = None;
-        if autoplay { self.sync_tray_tooltip("vkmusic"); }
+        if autoplay { self.sync_tray_tooltip(theme::APP_NAME); }
     }
 
     fn play_prev(&mut self) {
@@ -1630,7 +1617,7 @@ fn set_queue_for_my_music(&mut self) {
         let _ = menu.append(&next);
         let _ = menu.append(&quit);
         let tray = match TrayIconBuilder::new()
-            .with_tooltip("vkmusic")
+            .with_tooltip(theme::APP_NAME)
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -2113,7 +2100,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
                     self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_id });
-                    self.sync_tray_tooltip("vkmusic");
+                    self.sync_tray_tooltip(theme::APP_NAME);
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
@@ -2125,7 +2112,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.now_playing = None;
                     self.pending_play_track_id = None;
                     self.current_gen = 0;
-                    self.sync_tray_tooltip("vkmusic");
+                    self.sync_tray_tooltip(theme::APP_NAME);
                 }
                 PlayerEvent::Ended { generation } => {
                     if generation == self.current_gen {
@@ -2143,7 +2130,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 PlayerEvent::Error(msg) => {
                     self.pending_play_track_id = None;
                     self.now_playing = None;
-                    self.sync_tray_tooltip("vkmusic");
+                    self.sync_tray_tooltip(theme::APP_NAME);
                     crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
