@@ -7,6 +7,8 @@ use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, 
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
+const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     MyMusic,
@@ -217,6 +219,7 @@ struct GuiAppImpl {
     tracks_count: Option<u64>,
     loading_tracks: bool,
     next_offset: usize,
+    filter_autoload_stopped: bool,
     my_status: String,
 
     playlists: Vec<PlaylistView>,
@@ -340,6 +343,7 @@ impl GuiAppImpl {
             tracks_count: None,
             loading_tracks: false,
             next_offset: 0,
+            filter_autoload_stopped: false,
             my_status: String::new(),
 
             playlists: Vec::new(),
@@ -1090,6 +1094,8 @@ fn set_queue_for_my_music(&mut self) {
         self.tracks_count = None;
         self.next_offset = 0;
         self.loading_tracks = false;
+        self.filter_autoload_stopped = false;
+        self.my_status.clear();
         self.request_tracks_load();
     }
 
@@ -1182,11 +1188,16 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             match evt {
                 UiEvent::TracksLoaded { offset, count, items } => {
                     if offset == self.next_offset {
+                        let old_offset = self.next_offset;
+                        let no_progress = items.is_empty();
                         self.next_offset += items.len();
                         self.tracks.extend(items);
                         if let Some(c) = count { self.tracks_count = Some(c); }
                         self.loading_tracks = false;
                         self.my_status.clear();
+                        if no_progress || self.next_offset == old_offset {
+                            self.filter_autoload_stopped = true;
+                        }
                         if !self.credentials_saved {
                             storage::save_credentials(&self.token, &self.ua);
                             self.credentials_saved = true;
@@ -1194,10 +1205,6 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         }
                         if self.queue_source == QueueSource::MyMusic && self.my_filter.trim().is_empty() {
                             self.queue = self.tracks.clone();
-                        }
-                        let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(true);
-                        if !self.my_filter.trim().is_empty() && need_more {
-                            self.request_tracks_load();
                         }
                     }
                 }
@@ -1346,12 +1353,17 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         }
                         continue;
                     }
+                    let tracks_error = self.loading_tracks;
                     self.loading_tracks = false;
                     self.loading_playlists = false;
                     self.loading_playlist_tracks = false;
                     self.loading_search = false;
+                    self.filter_autoload_stopped = true;
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else if tracks_error || !self.my_filter.trim().is_empty() {
+                        self.status = FILTER_AUTOLOAD_ERROR_TEXT.to_string();
+                        if self.active_tab == Tab::MyMusic { self.my_status = FILTER_AUTOLOAD_ERROR_TEXT.to_string(); }
                     } else {
                         self.status = msg.clone();
                         if self.active_tab == Tab::MyMusic { self.my_status = msg.clone(); }
@@ -1363,8 +1375,11 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
             }
         }
-        if !self.my_filter.trim().is_empty() && !self.loading_tracks {
-            let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(true);
+        if !self.my_filter.trim().is_empty()
+            && !self.loading_tracks
+            && !self.filter_autoload_stopped
+        {
+            let need_more = self.tracks_count.map(|c| (self.next_offset as u64) < c).unwrap_or(false);
             if need_more { self.request_tracks_load(); }
         }
         while let Ok(evt) = self.evt_rx.try_recv() {
@@ -1464,6 +1479,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.tracks.clear();
                     self.tracks_count = None;
                     self.next_offset = 0;
+                    self.filter_autoload_stopped = false;
                     self.using_saved_credentials = false;
                     self.credentials_saved = false;
                     self.request_tracks_load();
@@ -1802,6 +1818,7 @@ impl eframe::App for GuiAppImpl {
             match self.active_tab {
                 Tab::MyMusic => {
                     if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }
+                    let filter_before = self.my_filter.clone();
                     ui.horizontal(|ui| {
                         let hint = "\u{0424}\u{0438}\u{043B}\u{044C}\u{0442}\u{0440}";
                         let resp = ui.add(egui::TextEdit::singleline(&mut self.my_filter).hint_text(hint).desired_width(220.0));
@@ -1810,6 +1827,10 @@ impl eframe::App for GuiAppImpl {
                             resp.request_focus();
                         }
                     });
+                    if self.my_filter != filter_before {
+                        self.filter_autoload_stopped = false;
+                        self.my_status.clear();
+                    }
                     let filter_active = !self.my_filter.trim().is_empty();
                     let filtered = self.my_music_filtered();
                     let total = if filter_active { filtered.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
