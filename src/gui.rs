@@ -18,7 +18,8 @@ pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> 
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
     let (ui_evt_tx, ui_evt_rx) = std::sync::mpsc::channel::<UiEvent>();
 
-    let options = eframe::NativeOptions::default();
+    let mut options = eframe::NativeOptions::default();
+    options.glow_options.vsync = true;
     eframe::run_native(
         "vkmusic",
         options,
@@ -58,8 +59,10 @@ struct GuiAppImpl {
     pending_play_index: Option<usize>,
     current_gen: u64,
     fps_enabled: bool,
+    fps_passes: u64,
     fps_frames: u64,
     fps_last: Instant,
+    last_frame: Instant,
     egui_ctx: egui::Context,
 }
 
@@ -97,8 +100,10 @@ impl GuiAppImpl {
             pending_play_index: None,
             current_gen: 0,
             fps_enabled: std::env::var_os("VKMUSIC_FPS").as_deref() == Some(std::ffi::OsStr::new("1")),
+            fps_passes: 0,
             fps_frames: 0,
             fps_last: Instant::now(),
+            last_frame: Instant::now(),
             egui_ctx,
         };
         if app.logged_in {
@@ -280,12 +285,24 @@ impl GuiAppImpl {
 impl eframe::App for GuiAppImpl {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let pass_index = ctx.current_pass_index();
+        if pass_index == 0 {
+            let elapsed = self.last_frame.elapsed();
+            if elapsed < Duration::from_millis(16) {
+                std::thread::sleep(Duration::from_millis(16) - elapsed);
+            }
+            self.last_frame = Instant::now();
+        }
         self.handle_events(&ctx);
         if self.fps_enabled {
-            self.fps_frames += 1;
+            self.fps_passes += 1;
+            if pass_index == 0 {
+                self.fps_frames += 1;
+            }
             let elapsed = self.fps_last.elapsed();
             if elapsed >= Duration::from_secs(10) {
-                eprintln!("frames in last 10s: {}", self.fps_frames);
+                eprintln!("passes: {}, frames: {}", self.fps_passes, self.fps_frames);
+                self.fps_passes = 0;
                 self.fps_frames = 0;
                 self.fps_last = Instant::now();
             }
@@ -354,7 +371,7 @@ impl eframe::App for GuiAppImpl {
                     let line = self.tracks[i].display_line();
                     let is_playing = self.now_playing.as_ref().and_then(|np| np.track_index) == Some(i);
                     let text = if is_playing { egui::RichText::new(line).strong() } else { egui::RichText::new(line) };
-                    let resp = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                    let resp = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
                     if resp.double_clicked() {
                         self.play_index(i);
                     }
