@@ -623,8 +623,8 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instanc
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PlayerCmd>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
     let (ui_evt_tx, ui_evt_rx) = std::sync::mpsc::channel::<UiEvent>();
-    let window_icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
-        .expect("embedded icon.png is valid");
+    let window_icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon_256.png"))
+        .expect("embedded icon_256.png is valid");
 
     let mut options = eframe::NativeOptions::default();
     options.glow_options.vsync = true;
