@@ -1,4 +1,4 @@
-﻿use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
+use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
 use crate::player::{PlayerCmd, PlayerEvent};
 use crate::storage;
 use eframe::egui;
@@ -10,6 +10,7 @@ enum Tab {
     MyMusic,
     Playlists,
     Search,
+    Recommendations,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -17,6 +18,7 @@ enum QueueSource {
     MyMusic,
     Playlist,
     Search,
+    Recommendations,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -135,6 +137,8 @@ enum UiEvent {
     PlaylistsLoaded { offset: usize, count: Option<u64>, items: Vec<PlaylistView> },
     PlaylistTracksLoaded { playlist_id: i64, owner_id: i64, offset: usize, count: Option<u64>, items: Vec<Track> },
     SearchLoaded { query: String, request_id: u64, offset: usize, count: Option<u64>, items: Vec<Track> },
+    RecommendationsLoaded { request_id: u64, replace: bool, items: Vec<Track> },
+    RecommendationsError { request_id: u64, msg: String },
     AddDone { track_id: TrackId },
     AddError { track_id: TrackId, msg: String },
     DeleteDone { track_id: TrackId },
@@ -180,6 +184,14 @@ struct GuiAppImpl {
     search_offset: usize,
     search_status: String,
     search_request_id: u64,
+
+    rec_tracks: Vec<Track>,
+    rec_loaded_once: bool,
+    rec_loading: bool,
+    rec_status: String,
+    rec_no_more: bool,
+    rec_request_id: u64,
+    rec_waiting_next: bool,
 
     queue: Vec<Track>,
     queue_source: QueueSource,
@@ -259,6 +271,14 @@ impl GuiAppImpl {
             search_offset: 0,
             search_status: String::new(),
             search_request_id: 0,
+
+            rec_tracks: Vec::new(),
+            rec_loaded_once: false,
+            rec_loading: false,
+            rec_status: String::new(),
+            rec_no_more: false,
+            rec_request_id: 0,
+            rec_waiting_next: false,
 
             queue: Vec::new(),
             queue_source: QueueSource::MyMusic,
@@ -475,6 +495,62 @@ impl GuiAppImpl {
             ctx.request_repaint();
         });
     }
+
+        fn request_recommendations(&mut self, replace: bool) {
+        if self.rec_loading { return; }
+        if !replace && self.rec_no_more { return; }
+        self.rec_loading = true;
+        self.rec_status = "загрузка...".to_string();
+        self.rec_request_id = self.rec_request_id.wrapping_add(1);
+        if replace {
+            self.rec_no_more = false;
+        }
+        let request_id = self.rec_request_id;
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<Vec<Track>> {
+                let client = api::build_client(&ua)?;
+                let resp: AudioGetResponse = api::vk_call(&client, &token, "audio.getRecommendations", &[("count", "50")])?;
+                let items = resp.items.unwrap_or_default();
+                Ok(items.iter().map(Track::from_value).collect::<Vec<_>>())
+            })();
+            match res {
+                Ok(items) => { let _ = tx.send(UiEvent::RecommendationsLoaded { request_id, replace, items }); }
+                Err(e) => { let _ = tx.send(UiEvent::RecommendationsError { request_id, msg: api::sanitize_output(&format!("{e:#}")) }); }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn request_recommendations_more(&mut self) {
+        if self.rec_loading || self.rec_no_more { return; }
+        if !self.rec_loaded_once { self.request_recommendations(false); return; }
+        self.rec_loading = true;
+        self.rec_status = "загрузка...".to_string();
+        self.rec_request_id = self.rec_request_id.wrapping_add(1);
+        let request_id = self.rec_request_id;
+        let replace = false;
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<Vec<Track>> {
+                let client = api::build_client(&ua)?;
+                let resp: AudioGetResponse = api::vk_call(&client, &token, "audio.getRecommendations", &[("count", "50")])?;
+                let items = resp.items.unwrap_or_default();
+                Ok(items.iter().map(Track::from_value).collect::<Vec<_>>())
+            })();
+            match res {
+                Ok(items) => { let _ = tx.send(UiEvent::RecommendationsLoaded { request_id, replace, items }); }
+                Err(e) => { let _ = tx.send(UiEvent::RecommendationsError { request_id, msg: api::sanitize_output(&format!("{e:#}")) }); }
+            }
+            ctx.request_repaint();
+        });
+    }
     fn logout_to_login(&mut self, message: Option<String>) {
         storage::delete_credentials();
         self.token.clear();
@@ -488,6 +564,7 @@ impl GuiAppImpl {
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
         self.selected_playlist = None; self.playlist_tracks.clear(); self.playlist_tracks_count = None; self.loading_playlist_tracks = false; self.playlist_tracks_offset = 0; self.playlist_status.clear();
         self.search_query.clear(); self.search_input.clear(); self.search_tracks.clear(); self.search_count = None; self.loading_search = false; self.search_offset = 0; self.search_status.clear(); self.search_request_id = 0;
+        self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false;
 
         self.queue.clear(); self.queue_source = QueueSource::MyMusic; self.queue_playlist = None; self.queue_search_query = None;
         self.add_states.clear();
@@ -502,8 +579,7 @@ impl GuiAppImpl {
         let _ = self.cmd_tx.send(PlayerCmd::Stop);
         self.status = message.unwrap_or_else(|| "Login required".to_string());
     }
-
-    fn set_queue_for_my_music(&mut self) {
+fn set_queue_for_my_music(&mut self) {
         self.queue = self.tracks.clone();
         self.queue_source = QueueSource::MyMusic;
         self.queue_playlist = None;
@@ -526,11 +602,19 @@ impl GuiAppImpl {
         self.queue_search_query = Some(self.search_query.clone());
     }
 
+    fn set_queue_for_recommendations(&mut self) {
+        self.queue = self.rec_tracks.clone();
+        self.queue_source = QueueSource::Recommendations;
+        self.queue_playlist = None;
+        self.queue_search_query = None;
+    }
+
     fn play_from_list(&mut self, source: QueueSource, index: usize) {
         let tracks = match source {
             QueueSource::MyMusic => self.tracks.clone(),
             QueueSource::Playlist => self.playlist_tracks.clone(),
             QueueSource::Search => self.search_tracks.clone(),
+            QueueSource::Recommendations => self.rec_tracks.clone(),
         };
         let Some(track) = tracks.get(index).cloned() else { return; };
         if !track.is_playable() { return; }
@@ -538,6 +622,7 @@ impl GuiAppImpl {
             QueueSource::MyMusic => self.set_queue_for_my_music(),
             QueueSource::Playlist => self.set_queue_for_playlist(),
             QueueSource::Search => self.set_queue_for_search(),
+            QueueSource::Recommendations => self.set_queue_for_recommendations(),
         }
         self.selected_index = Some(index);
         let tid = TrackId::from_track(&track);
@@ -571,9 +656,14 @@ impl GuiAppImpl {
         let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
         if let Some(next) = self.find_next_playable_id(cur, 1) {
             self.play_track_id(next);
-        } else {
-            self.now_playing = None;
+            return;
         }
+        if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
+            self.rec_waiting_next = true;
+            self.request_recommendations_more();
+            return;
+        }
+        self.now_playing = None;
     }
 
     fn play_prev(&mut self) {
@@ -611,6 +701,13 @@ impl GuiAppImpl {
                 })?;
                 Some((QueueSource::Search, idx))
             }
+            Tab::Recommendations => {
+                let idx = self.selected_index.or_else(|| {
+                    let is_current = self.queue_source == QueueSource::Recommendations;
+                    if is_current { self.now_playing.as_ref().and_then(|np| np.track_id).and_then(|tid| self.rec_tracks.iter().position(|t| TrackId::from_track(t) == tid)) } else { None }
+                })?;
+                Some((QueueSource::Recommendations, idx))
+            }
         }
     }
 
@@ -646,7 +743,43 @@ impl GuiAppImpl {
         self.request_tracks_load();
     }
 
-    fn remove_track_locally(&mut self, track_id: TrackId) {
+        fn append_recommendations(&mut self, request_id: u64, replace: bool, items: Vec<Track>) {
+        if request_id != self.rec_request_id { return; }
+        self.rec_loading = false;
+        self.rec_loaded_once = true;
+        if replace {
+            let mut seen: std::collections::HashSet<TrackId> = std::collections::HashSet::new();
+            let mut fresh: Vec<Track> = Vec::with_capacity(items.len());
+            for t in items {
+                let tid = TrackId::from_track(&t);
+                if seen.insert(tid) { fresh.push(t); }
+            }
+            self.rec_tracks = fresh;
+            self.rec_no_more = false;
+            self.rec_status.clear();
+            // keep playing track and queue intact for QueueSource::Recommendations
+            return;
+        }
+        let mut added = 0usize;
+        let mut existing: std::collections::HashSet<TrackId> = self.rec_tracks.iter().map(TrackId::from_track).collect();
+        for t in items {
+            let tid = TrackId::from_track(&t);
+            if existing.insert(tid) {
+                self.rec_tracks.push(t);
+                added += 1;
+            }
+        }
+        if added == 0 {
+            self.rec_no_more = true;
+            self.rec_status = "больше нет".to_string();
+        } else {
+            self.rec_status.clear();
+        }
+        if self.queue_source == QueueSource::Recommendations {
+            self.queue = self.rec_tracks.clone();
+        }
+    }
+fn remove_track_locally(&mut self, track_id: TrackId) {
         self.tracks.retain(|t| TrackId::from_track(t) != track_id);
         if let Some(c) = self.tracks_count.as_mut() {
             *c = c.saturating_sub(1);
@@ -740,6 +873,34 @@ impl GuiAppImpl {
                         if self.queue_source == QueueSource::Search && self.queue_search_query.as_deref() == Some(self.search_query.as_str()) {
                             self.queue = self.search_tracks.clone();
                         }
+                    }
+                }
+                                UiEvent::RecommendationsLoaded { request_id, replace, items } => {
+                    let was_waiting_next = self.rec_waiting_next;
+                    let cur = self.now_playing.as_ref().and_then(|np| np.track_id);
+                    self.append_recommendations(request_id, replace, items);
+                    if was_waiting_next {
+                        self.rec_waiting_next = false;
+                        if self.queue_source == QueueSource::Recommendations {
+                            if let Some(cur_id) = cur {
+                                if let Some(next) = self.find_next_playable_id(cur_id, 1) {
+                                    self.play_track_id(next);
+                                } else if self.rec_no_more {
+                                    self.now_playing = None;
+                                }
+                            } else if self.rec_no_more {
+                                self.now_playing = None;
+                            }
+                        }
+                    }
+                }UiEvent::RecommendationsError { request_id, msg } => {
+                    if request_id != self.rec_request_id { continue; }
+                    self.rec_loading = false;
+                    self.rec_waiting_next = false;
+                    if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
+                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                    } else {
+                        self.rec_status = msg;
                     }
                 }
                 UiEvent::AddDone { track_id } => {
@@ -931,7 +1092,7 @@ impl GuiAppImpl {
     fn render_track_action(&mut self, ui: &mut egui::Ui, track: &Track, source: QueueSource, tid: &TrackId, row_resp: &egui::Response) -> bool {
         match source {
             QueueSource::MyMusic => self.render_delete_action(ui, track, tid, row_resp),
-            QueueSource::Playlist | QueueSource::Search => self.render_add_action(ui, track, tid),
+            QueueSource::Playlist | QueueSource::Search | QueueSource::Recommendations => self.render_add_action(ui, track, tid),
         }
     }
 
@@ -1063,6 +1224,7 @@ impl GuiAppImpl {
                 self.queue_source == QueueSource::Search
                     && self.queue_search_query.as_deref() == Some(self.search_query.as_str())
             }
+            QueueSource::Recommendations => self.queue_source == QueueSource::Recommendations,
         }
     }
 }
@@ -1160,6 +1322,7 @@ impl eframe::App for GuiAppImpl {
                 ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "Моя музыка");
                 ui.selectable_value(&mut self.active_tab, Tab::Playlists, "Плейлисты");
                 ui.selectable_value(&mut self.active_tab, Tab::Search, "Поиск");
+                ui.selectable_value(&mut self.active_tab, Tab::Recommendations, "Рекомендации");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Log out").clicked() {
                         self.logout_to_login(None);
@@ -1271,6 +1434,44 @@ impl eframe::App for GuiAppImpl {
                             self.render_track_row(ui, i, &track, width, row_h, QueueSource::Search, playing_here);
                         }
                         if range.end + 10 >= self.search_tracks.len() && !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
+                    });
+                }
+                Tab::Recommendations => {
+                    if !self.rec_loaded_once && !self.rec_loading {
+                        self.request_recommendations(false);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Обновить").clicked() && !self.rec_loading {
+                            self.request_recommendations(true);
+                        }
+                        if self.rec_loading {
+                            ui.add(egui::Label::new("загрузка...").selectable(false));
+                        }
+                    });
+                    if !self.rec_status.is_empty() {
+                        ui.add(egui::Label::new(&self.rec_status).selectable(false));
+                    }
+                    let playing_tid = if self.current_playing_matches(QueueSource::Recommendations) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                    let show_footer = self.rec_no_more || self.rec_loading || !self.rec_loaded_once;
+                    let total = self.rec_tracks.len() + if show_footer { 1 } else { 0 };
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total.max(1), |ui, range| {
+                        let width = ui.available_width();
+                        for i in range.clone() {
+                            if i >= self.rec_tracks.len() {
+                                let label = if self.rec_no_more { "больше нет" } else { "загрузка..." };
+                                if !self.rec_no_more && !self.rec_loading && self.rec_loaded_once {
+                                    self.request_recommendations_more();
+                                }
+                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new(label).selectable(false)); });
+                                continue;
+                            }
+                            let track = self.rec_tracks[i].clone();
+                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
+                            self.render_track_row(ui, i, &track, width, row_h, QueueSource::Recommendations, playing_here);
+                        }
+                        if self.rec_loaded_once && !self.rec_no_more && !self.rec_loading && range.end + 5 >= self.rec_tracks.len() {
+                            self.request_recommendations_more();
+                        }
                     });
                 }
             }
