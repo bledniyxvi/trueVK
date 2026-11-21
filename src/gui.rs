@@ -56,6 +56,7 @@ struct GuiAppImpl {
     volume: f32,
     seek_drag: Option<u64>,
     pending_play_index: Option<usize>,
+    current_gen: u64,
     egui_ctx: egui::Context,
 }
 
@@ -91,6 +92,7 @@ impl GuiAppImpl {
             volume: 1.0,
             seek_drag: None,
             pending_play_index: None,
+            current_gen: 0,
             egui_ctx,
         };
         if app.logged_in {
@@ -183,10 +185,12 @@ impl GuiAppImpl {
         }
         while let Ok(evt) = self.evt_rx.try_recv() {
             match evt {
-                PlayerEvent::Downloading { artist, title } => {
+                PlayerEvent::Downloading { artist, title, generation } => {
+                    self.current_gen = generation;
                     self.status = format!("Downloading: {artist} - {title}");
                 }
-                PlayerEvent::Playing { artist, title, duration_secs } => {
+                PlayerEvent::Playing { artist, title, duration_secs, generation } => {
+                    self.current_gen = generation;
                     self.status = String::new();
                     self.seek_drag = None;
                     self.now_playing = Some(NowPlaying {
@@ -205,10 +209,13 @@ impl GuiAppImpl {
                 PlayerEvent::Stopped => {
                     self.now_playing = None;
                     self.pending_play_index = None;
+                    self.current_gen = 0;
                     self.status = "Idle".to_string();
                 }
-                PlayerEvent::Ended => {
-                    self.play_next();
+                PlayerEvent::Ended { generation } => {
+                    if generation == self.current_gen {
+                        self.play_next();
+                    }
                 }
                 PlayerEvent::Position { position_secs, duration_secs } => {
                     if let Some(np) = self.now_playing.as_mut() {

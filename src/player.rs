@@ -4,7 +4,7 @@ use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde_json::Value;
 use std::io::{Cursor, Read};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{Receiver, Sender},
     Arc,
 };
@@ -22,12 +22,12 @@ pub enum PlayerCmd {
 
 #[derive(Clone, Debug)]
 pub enum PlayerEvent {
-    Downloading { artist: String, title: String },
-    Playing { artist: String, title: String, duration_secs: Option<u64> },
+    Downloading { artist: String, title: String, generation: u64 },
+    Playing { artist: String, title: String, duration_secs: Option<u64>, generation: u64 },
     Paused { artist: String, title: String, position_secs: u64, duration_secs: Option<u64> },
     Resumed { artist: String, title: String, position_secs: u64, duration_secs: Option<u64> },
     Stopped,
-    Ended,
+    Ended { generation: u64 },
     Position { position_secs: u64, duration_secs: Option<u64> },
     Volume(f32),
     Error(String),
@@ -77,6 +77,7 @@ fn worker_loop(
 ) {
     let mut state: Option<PlayingState> = None;
     let mut volume: f32 = 1.0;
+    let current_generation = Arc::new(AtomicU64::new(0));
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
@@ -162,15 +163,18 @@ fn worker_loop(
                 if let Some(s) = state.take() {
                     s.stop();
                 }
+                let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
+                current_generation.store(generation, Ordering::Relaxed);
                 send_evt(
                     &evt_tx,
                     &ctx,
                     PlayerEvent::Downloading {
                         artist: track.artist.clone(),
                         title: track.title.clone(),
+                        generation,
                     },
                 );
-                match play_track(&client, track, &evt_tx, &ctx, volume) {
+                match play_track(&client, track, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
                     Ok(s) => state = Some(s),
                     Err(e) => {
                         send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
@@ -195,6 +199,8 @@ fn play_track(
     evt_tx: &Sender<PlayerEvent>,
     ctx: &eframe::egui::Context,
     volume: f32,
+    generation: u64,
+    current_generation: Arc<AtomicU64>,
 ) -> Result<PlayingState> {
     let url = select_play_url(client, &track)?;
     let bytes = download_track_bytes(client, &url)?;
@@ -215,6 +221,7 @@ fn play_track(
             artist: track.artist.clone(),
             title: track.title.clone(),
             duration_secs,
+            generation,
         },
     );
 
@@ -222,6 +229,8 @@ fn play_track(
     let monitor = spawn_monitor(
         Arc::clone(&player),
         Arc::clone(&stop_flag),
+        generation,
+        current_generation,
         evt_tx.clone(),
         ctx.clone(),
         duration_secs,
@@ -243,6 +252,8 @@ fn play_track(
 fn spawn_monitor(
     player: Arc<Player>,
     stop_flag: Arc<AtomicBool>,
+    generation: u64,
+    current_generation: Arc<AtomicU64>,
     evt_tx: Sender<PlayerEvent>,
     ctx: eframe::egui::Context,
     _duration_secs: Option<u64>,
@@ -253,9 +264,14 @@ fn spawn_monitor(
             if stop_flag.load(Ordering::Relaxed) {
                 break;
             }
+            if current_generation.load(Ordering::Relaxed) != generation {
+                break;
+            }
             if player.empty() {
-                let _ = evt_tx.send(PlayerEvent::Ended);
-                ctx.request_repaint();
+                if current_generation.load(Ordering::Relaxed) == generation {
+                    let _ = evt_tx.send(PlayerEvent::Ended { generation });
+                    ctx.request_repaint();
+                }
                 break;
             }
         }
