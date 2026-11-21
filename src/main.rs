@@ -1,11 +1,16 @@
 ﻿use anyhow::{anyhow, Context, Result};
-use rodio::{Decoder, DeviceSinkBuilder, Player};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{Cursor, Read};
+use std::io::{BufRead, Cursor, Read};
 use std::process::ExitCode;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const API_VERSION: &str = "5.207";
@@ -17,7 +22,6 @@ const PLAYLIST_TRACK_LIMIT: usize = 10;
 const PROBE_TRACK_LIMIT: usize = 2;
 const REQUEST_TIMEOUT_SECS: u64 = 20;
 const PROBE_BYTES: usize = 16;
-const PLAY_DEFAULT_SECONDS: u64 = 20;
 const PLAY_MAX_BYTES: usize = 40 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -102,11 +106,15 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if let Some(index_raw) = play_index {
-        let seconds = match play_seconds {
-            Some(raw) => parse_play_seconds(&raw)?,
-            None => PLAY_DEFAULT_SECONDS,
-        };
-        run_play(&client, &token, &index_raw, seconds)?;
+        match play_seconds {
+            Some(raw) => {
+                let seconds = parse_play_seconds(&raw)?;
+                run_play(&client, &token, &index_raw, Some(seconds))?;
+            }
+            None => {
+                run_play(&client, &token, &index_raw, None)?;
+            }
+        }
         return Ok(());
     }
 
@@ -718,7 +726,12 @@ fn parse_play_seconds(raw: &str) -> Result<u64> {
     Ok(secs)
 }
 
-fn run_play(client: &reqwest::blocking::Client, token: &str, index_raw: &str, seconds: u64) -> Result<()> {
+fn run_play(
+    client: &reqwest::blocking::Client,
+    token: &str,
+    index_raw: &str,
+    seconds: Option<u64>,
+) -> Result<()> {
     let index: usize = index_raw.parse().map_err(|_| anyhow!("invalid --play value"))?;
     if index == 0 {
         return Err(anyhow!("--play index must start at 1"));
@@ -736,8 +749,12 @@ fn run_play(client: &reqwest::blocking::Client, token: &str, index_raw: &str, se
     let artist = string_field(item, "artist");
     let title = string_field(item, "title");
     let url = select_play_url(client, item)?;
+    println!("playing: {artist} - {title}");
     let bytes = download_track_bytes(client, &url)?;
-    play_bytes(bytes, &artist, &title, seconds)
+    match seconds {
+        Some(s) => play_bytes(bytes, &artist, &title, s),
+        None => play_interactive(bytes, &artist, &title),
+    }
 }
 
 fn select_play_url(client: &reqwest::blocking::Client, item: &Value) -> Result<String> {
@@ -811,13 +828,20 @@ fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result
     if !status.is_success() {
         return Err(anyhow!("request failed (status {})", status.as_u16()));
     }
-    if let Some(len) = resp.content_length() {
+    let content_length = resp.content_length();
+    println!(
+        "Content-Length: {}",
+        content_length
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "<missing>".to_string())
+    );
+    if let Some(len) = content_length {
         if len as usize > PLAY_MAX_BYTES {
             return Err(anyhow!("request failed (decode)"));
         }
     }
     let mut buf: Vec<u8> = Vec::with_capacity(
-        resp.content_length()
+        content_length
             .map(|l| (l as usize).min(PLAY_MAX_BYTES))
             .unwrap_or(0),
     );
@@ -832,6 +856,15 @@ fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result
         }
         buf.extend_from_slice(&chunk[..n]);
     }
+    let bytes_read = buf.len();
+    let vec_len = buf.len();
+    println!("bytes read: {bytes_read}");
+    println!("Vec len: {vec_len}");
+    if let Some(len) = content_length {
+        if bytes_read != len as usize {
+            return Err(anyhow!("request failed (decode)"));
+        }
+    }
     let elapsed = start.elapsed().as_secs_f64();
     let mb = buf.len() as f64 / (1024.0 * 1024.0);
     println!("{mb:.2} MB in {elapsed:.2}s");
@@ -844,7 +877,6 @@ fn play_bytes(bytes: Vec<u8>, artist: &str, title: &str, seconds: u64) -> Result
     let player = Player::connect_new(&stream.mixer());
     let decoder = Decoder::try_from(Cursor::new(bytes)).map_err(|_| anyhow!("request failed (decode)"))?;
     player.append(decoder);
-    println!("playing: {artist} - {title}");
     let start = Instant::now();
     let mut next_report = Duration::from_secs(5);
     let limit = Duration::from_secs(seconds);
@@ -866,6 +898,145 @@ fn play_bytes(bytes: Vec<u8>, artist: &str, title: &str, seconds: u64) -> Result
         std::thread::sleep(sleep_for);
     }
     player.stop();
+    println!("done");
+    Ok(())
+}
+fn decode_duration(bytes: &[u8]) -> Option<Duration> {
+    let decoder = Decoder::try_from(Cursor::new(bytes.to_vec())).ok()?;
+    decoder.total_duration()
+}
+
+fn format_pos_dur(pos: Duration, total: Option<Duration>) -> String {
+    let pos_s = pos.as_secs();
+    match total {
+        Some(d) => format!("{pos_s} / {}", d.as_secs()),
+        None => format!("{pos_s} / ?"),
+    }
+}
+
+fn print_state(playing: bool, pos: Duration, total: Option<Duration>, volume: f32) {
+    let state = if playing { "playing" } else { "paused" };
+    let pos_s = pos.as_secs();
+    let dur_s = total.map(|d| d.as_secs().to_string()).unwrap_or_else(|| "?".to_string());
+    println!("state: {state}, pos: {pos_s}s, duration: {dur_s}s, volume: {volume:.2}");
+}
+
+fn play_interactive(bytes: Vec<u8>, _artist: &str, _title: &str) -> Result<()> {
+    let total_duration = decode_duration(&bytes);
+    let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("request failed (decode)"))?;
+    stream.log_on_drop(false);
+    let player = Arc::new(Player::connect_new(&stream.mixer()));
+    let bytes = Arc::new(bytes);
+    let decoder = Decoder::try_from(Cursor::new(bytes.as_ref().clone())).map_err(|_| anyhow!("request failed (decode)"))?;
+    player.append(decoder);
+    print_state(true, player.get_pos(), total_duration, player.volume());
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let reporter_player = Arc::clone(&player);
+    let reporter_stop = Arc::clone(&stop);
+    let reporter_total = total_duration;
+    let reporter = thread::spawn(move || {
+        while !reporter_stop.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(200));
+            if reporter_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let pos = reporter_player.get_pos();
+            let pos_s = pos.as_secs();
+            if pos_s > 0 && pos_s % 5 == 0 && pos.subsec_millis() < 250 {
+                println!("{}", format_pos_dur(pos, reporter_total));
+                thread::sleep(Duration::from_millis(260));
+            }
+            if reporter_player.empty() {
+                break;
+            }
+        }
+    });
+
+    let stdin = std::io::stdin();
+    let mut playing = true;
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let cmd = parts.next().unwrap_or("");
+        match cmd {
+            "p" => {
+                if playing {
+                    player.pause();
+                    playing = false;
+                } else {
+                    player.play();
+                    playing = true;
+                }
+                print_state(playing, player.get_pos(), total_duration, player.volume());
+            }
+            "s" => {
+                let Some(arg) = parts.next() else {
+                    println!("unknown");
+                    continue;
+                };
+                let Ok(sec) = arg.parse::<u64>() else {
+                    println!("unknown");
+                    continue;
+                };
+                let target = Duration::from_secs(sec);
+                let decoder = match Decoder::try_from(Cursor::new(bytes.as_ref().clone())) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        println!("request failed (decode)");
+                        continue;
+                    }
+                };
+                let source = decoder.skip_duration(target);
+                player.clear();
+                player.append(source);
+                if !playing {
+                    player.pause();
+                }
+                print_state(playing, player.get_pos(), total_duration, player.volume());
+            }
+            "v" => {
+                let Some(arg) = parts.next() else {
+                    println!("unknown");
+                    continue;
+                };
+                let Ok(vol) = arg.parse::<f32>() else {
+                    println!("unknown");
+                    continue;
+                };
+                if !(0.0..=1.5).contains(&vol) {
+                    println!("unknown");
+                    continue;
+                }
+                player.set_volume(vol);
+                print_state(playing, player.get_pos(), total_duration, player.volume());
+            }
+            "h" => {
+                println!("p pause/resume | s <sec> seek | v <x> volume 0.0..1.5 | h help | q quit");
+                print_state(playing, player.get_pos(), total_duration, player.volume());
+            }
+            "q" => {
+                break;
+            }
+            _ => {
+                println!("unknown");
+            }
+        }
+        if player.empty() && playing {
+            // track ended naturally; keep accepting commands? better exit or report
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    player.stop();
+    let _ = reporter.join();
     println!("done");
     Ok(())
 }
