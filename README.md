@@ -1,40 +1,100 @@
-# trueVK
+<div align="center">
 
-![Иконка trueVK](assets/icon_256.png)
+<img src="assets/icon_256.png" alt="trueVK" width="150" />
 
-**trueVK** — небольшой плеер музыки ВКонтакте для Windows, написанный на Rust. Задумывался как лёгкая замена браузеру: почти не грузит процессор и память, стартует быстро. Без Electron, Tauri и webview.
+<h1>trueVK</h1>
 
-Подключите свой аккаунт VK — и просто слушайте музыку.
+<p><strong>Музыка ВКонтакте без браузера.<br />Без Electron, Tauri и webview. Просто Rust и окно.</strong></p>
+
+<p>
+  <a href="https://github.com/bledniyxvi/trueVK/releases"><img src="https://img.shields.io/github/v/release/bledniyxvi/trueVK?display_name=tag&amp;style=for-the-badge" alt="Release" /></a>
+  <a href="https://github.com/bledniyxvi/trueVK/releases"><img src="https://img.shields.io/github/downloads/bledniyxvi/trueVK/total?style=for-the-badge" alt="Downloads" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=for-the-badge&amp;logo=windows" alt="Windows 10/11" />
+  <img src="https://img.shields.io/badge/built%20with-Rust-orange?style=for-the-badge&amp;logo=rust" alt="Rust" />
+  <img src="https://img.shields.io/badge/no%20Electron-no%20webview-brightgreen?style=for-the-badge" alt="No Electron" />
+</p>
+
+<p>
+  <a href="https://github.com/bledniyxvi/trueVK/releases/latest/download/trueVK-Setup-0.1.0.exe"><img src="https://img.shields.io/badge/Download-EXE-2ea44f?style=for-the-badge&amp;logo=github" alt="Скачать установщик" /></a>
+</p>
+
+</div>
+
+## Зачем это не браузер
+
+| | trueVK | Вкладка браузера |
+|---|---|---|
+| Запуск | сразу, одно окно | браузер + вкладка + расширения |
+| Память | аудио живёт в RAM | целый webview и процесс вкладки |
+| Файлы на диске | кэша музыки нет | кэш, куки, профиль |
+| Управление | медиаклавиши, трей, горячие клавиши | только вкладка |
+| Установщик | 6,5 МБ, без прав администратора | — |
 
 ## Что умеет
 
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Музыка**
+
 - Вкладки: «Моя музыка», плейлисты, поиск и рекомендации.
-- Добавление и удаление треков из своей музыки (кнопки «+» и «×», удаление с подтверждением).
+- Добавление и удаление треков: кнопки `+` и `×`, удаление с подтверждением.
 - Очередь привязана к треку, а не к номеру строки: переключение вкладок и новый поиск её не сбивают.
 - Prev/Next, автопродолжение, громкость и перемотка.
-- Медиаклавиши, горячие клавиши `Space` и `Ctrl+←/→` (не срабатывают, когда поле ввода в фокусе).
-- Закрытие окна сворачивает программу в трей; выход из трея завершает её полностью.
+
+</td>
+<td width="50%" valign="top">
+
+**Опыт**
+
+- Медиаклавиши и горячие клавиши `Space`, `Ctrl+←/→`; в поле ввода они не мешают.
+- Закрытие окна сворачивает программу в трей, выход из трея завершает её полностью.
 - Запоминаются громкость и последний воспроизведённый трек.
-- Аудио потоково воспроизводится из оперативной памяти: треки не скачиваются на диск, кэш музыки не создаётся.
-- Токен VK и User-Agent хранятся в Windows Credential Manager; в `%APPDATA%\vkmusic\settings.json` пишутся только настройки, без секретов.
+- Аудио потоково играет из оперативной памяти: треки не скачиваются на диск.
+- Токен VK и User-Agent лежат в Windows Credential Manager, а не в файлах настроек.
 
-## Скриншоты
+</td>
+</tr>
+</table>
 
-![Скриншот 1](docs/screenshots/01.jpg)
+### Горячие клавиши
 
-![Скриншот 2](docs/screenshots/02.jpg)
+| Клавиша | Действие |
+|---|---|
+| <kbd>Space</kbd> | пауза / продолжить |
+| <kbd>Ctrl</kbd> + <kbd>←</kbd> / <kbd>→</kbd> | предыдущий / следующий трек |
+| Медиаклавиши | работают как в обычном плеере |
+
+## Как выглядит
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/screenshots/01.jpg" alt="Скриншот 1" width="100%" /></td>
+<td width="50%" valign="top"><img src="docs/screenshots/02.jpg" alt="Скриншот 2" width="100%" /></td>
+</tr>
+</table>
+
+<p align="center">Скриншот 1 · Скриншот 2</p>
 
 ## Установка
 
-1. Скачайте `trueVK-Setup-0.1.0.exe` из раздела [Releases](https://github.com/bledniyxvi/trueVK/releases).
-2. Запустите установщик. Права администратора не требуются.
+1. [Скачать `trueVK-Setup-0.1.0.exe`](https://github.com/bledniyxvi/trueVK/releases/latest/download/trueVK-Setup-0.1.0.exe) или зайти в [Releases](https://github.com/bledniyxvi/trueVK/releases).
+2. Запустить установщик — права администратора не нужны.
 3. По умолчанию программа ставится в `%LOCALAPPDATA%\Programs\trueVK`. Ярлык в меню «Пуск» создаётся всегда, ярлык на рабочем столе — по желанию.
+
+<details>
+<summary>SHA256 установщика</summary>
+
+`FE11824C19C438167049E6DB0D911D53228A43275EAF53562D470A601DA62735`
+
+</details>
 
 ## Первый запуск
 
 При первом запуске введите токен доступа VK и User-Agent в окне программы. Они сохранятся в Windows Credential Manager и больше не будут запрашиваться. Для командной строки предусмотрены переменные окружения `VK_TOKEN` и `VK_UA`.
 
-Токен не записывается в файлы настроек и не попадает в лог.
+Токен не записывается в файлы настроек и не попадает в лог. В `%APPDATA%\vkmusic\settings.json` хранятся только настройки.
 
 ## Сборка из исходников
 
@@ -56,7 +116,8 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 
 Скрипт сам соберёт Release, создаст `installer\Output\trueVK-Setup-0.1.0.exe` и выведет его размер и SHA256.
 
-## Структура
+<details>
+<summary>Структура проекта</summary>
 
 - `src/main.rs` — точка входа и служебные режимы.
 - `src/api.rs` — клиент VK API.
@@ -66,6 +127,8 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 - `src/theme.rs` — цвета и оформление.
 - `assets/` — иконки и шрифты.
 - `installer/` — скрипт сборки установщика и файл проекта Inno Setup.
+
+</details>
 
 ## Лицензия
 
