@@ -1,4 +1,4 @@
-﻿use crate::api::{map_reqwest_error, sanitize_output, Track, PLAY_MAX_BYTES};
+use crate::api::{map_reqwest_error, sanitize_output, Track, PLAY_MAX_BYTES};
 use anyhow::{anyhow, Result};
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde_json::Value;
@@ -15,6 +15,8 @@ pub enum PlayerCmd {
     PlayTrack { track: Track },
     PauseResume,
     Stop,
+    SetVolume(f32),
+    Seek(u64),
     Shutdown,
 }
 
@@ -27,6 +29,7 @@ pub enum PlayerEvent {
     Stopped,
     Ended,
     Position { position_secs: u64, duration_secs: Option<u64> },
+    Volume(f32),
     Error(String),
 }
 
@@ -53,6 +56,7 @@ struct PlayingState {
     paused: bool,
     stop_flag: Arc<AtomicBool>,
     monitor: Option<thread::JoinHandle<()>>,
+    bytes: Arc<Vec<u8>>,
 }
 
 impl PlayingState {
@@ -72,6 +76,7 @@ fn worker_loop(
     ctx: eframe::egui::Context,
 ) {
     let mut state: Option<PlayingState> = None;
+    let mut volume: f32 = 1.0;
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
@@ -86,6 +91,41 @@ fn worker_loop(
                     s.stop();
                 }
                 send_evt(&evt_tx, &ctx, PlayerEvent::Stopped);
+            }
+            PlayerCmd::SetVolume(vol) => {
+                volume = vol.clamp(0.0, 1.5);
+                if let Some(s) = state.as_ref() {
+                    s.player.set_volume(volume);
+                }
+                send_evt(&evt_tx, &ctx, PlayerEvent::Volume(volume));
+            }
+            PlayerCmd::Seek(sec) => {
+                if let Some(s) = state.as_mut() {
+                    let target = Duration::from_secs(sec);
+                    let pos = if s.player.try_seek(target).is_ok() {
+                        target
+                    } else {
+                        let decoder = match Decoder::try_from(Cursor::new(s.bytes.as_ref().clone())) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                send_evt(&evt_tx, &ctx, PlayerEvent::Error("request failed (decode)".to_string()));
+                                continue;
+                            }
+                        };
+                        let source = decoder.skip_duration(target);
+                        s.player.clear();
+                        s.player.append(source);
+                        if s.paused {
+                            s.player.pause();
+                        }
+                        target
+                    };
+                    if s.paused {
+                        send_evt(&evt_tx, &ctx, PlayerEvent::Paused { artist: s.artist.clone(), title: s.title.clone(), position_secs: pos.as_secs(), duration_secs: s.duration_secs });
+                    } else {
+                        send_evt(&evt_tx, &ctx, PlayerEvent::Resumed { artist: s.artist.clone(), title: s.title.clone(), position_secs: pos.as_secs(), duration_secs: s.duration_secs });
+                    }
+                }
             }
             PlayerCmd::PauseResume => {
                 if let Some(s) = state.as_mut() {
@@ -130,7 +170,7 @@ fn worker_loop(
                         title: track.title.clone(),
                     },
                 );
-                match play_track(&client, track, &evt_tx, &ctx) {
+                match play_track(&client, track, &evt_tx, &ctx, volume) {
                     Ok(s) => state = Some(s),
                     Err(e) => {
                         send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
@@ -154,6 +194,7 @@ fn play_track(
     track: Track,
     evt_tx: &Sender<PlayerEvent>,
     ctx: &eframe::egui::Context,
+    volume: f32,
 ) -> Result<PlayingState> {
     let url = select_play_url(client, &track)?;
     let bytes = download_track_bytes(client, &url)?;
@@ -162,7 +203,9 @@ fn play_track(
     let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("request failed (decode)"))?;
     stream.log_on_drop(false);
     let player = Arc::new(Player::connect_new(&stream.mixer()));
-    let decoder = Decoder::try_from(Cursor::new(bytes)).map_err(|_| anyhow!("request failed (decode)"))?;
+    player.set_volume(volume);
+    let bytes = Arc::new(bytes);
+    let decoder = Decoder::try_from(Cursor::new(bytes.as_ref().clone())).map_err(|_| anyhow!("request failed (decode)"))?;
     player.append(decoder);
 
     send_evt(
@@ -193,6 +236,7 @@ fn play_track(
         paused: false,
         stop_flag,
         monitor: Some(monitor),
+        bytes,
     })
 }
 

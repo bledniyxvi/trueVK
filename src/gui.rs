@@ -10,6 +10,7 @@ struct NowPlaying {
     position_secs: u64,
     duration_secs: Option<u64>,
     paused: bool,
+    track_index: Option<usize>,
 }
 
 pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> {
@@ -52,6 +53,9 @@ struct GuiAppImpl {
     next_offset: usize,
     status: String,
     now_playing: Option<NowPlaying>,
+    volume: f32,
+    seek_drag: Option<u64>,
+    pending_play_index: Option<usize>,
     egui_ctx: egui::Context,
 }
 
@@ -84,6 +88,9 @@ impl GuiAppImpl {
             next_offset: 0,
             status: if logged_in { "Ready".to_string() } else { "Login required".to_string() },
             now_playing: None,
+            volume: 1.0,
+            seek_drag: None,
+            pending_play_index: None,
             egui_ctx,
         };
         if app.logged_in {
@@ -129,6 +136,33 @@ impl GuiAppImpl {
         });
     }
 
+    fn play_index(&mut self, index: usize) {
+        if index >= self.tracks.len() { return; }
+        self.pending_play_index = Some(index);
+        let track = self.tracks[index].clone();
+        let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
+    }
+
+    fn play_next(&mut self) {
+        if let Some(idx) = self.now_playing.as_ref().and_then(|np| np.track_index) {
+            let next = idx + 1;
+            if next < self.tracks.len() {
+                self.play_index(next);
+            } else {
+                self.now_playing = None;
+                self.status = "Idle".to_string();
+            }
+        }
+    }
+
+    fn play_prev(&mut self) {
+        if let Some(idx) = self.now_playing.as_ref().and_then(|np| np.track_index) {
+            if idx > 0 {
+                self.play_index(idx - 1);
+            }
+        }
+    }
+
     fn handle_events(&mut self, ctx: &egui::Context) {
         while let Ok(evt) = self.ui_evt_rx.try_recv() {
             match evt {
@@ -154,17 +188,27 @@ impl GuiAppImpl {
                 }
                 PlayerEvent::Playing { artist, title, duration_secs } => {
                     self.status = String::new();
-                    self.now_playing = Some(NowPlaying { artist, title, position_secs: 0, duration_secs, paused: false });
+                    self.seek_drag = None;
+                    self.now_playing = Some(NowPlaying {
+                        artist, title, position_secs: 0, duration_secs, paused: false,
+                        track_index: self.pending_play_index.take(),
+                    });
                 }
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
-                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: true });
+                    let track_index = self.now_playing.as_ref().and_then(|np| np.track_index).or(self.pending_play_index);
+                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: true, track_index });
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
-                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: false });
+                    let track_index = self.now_playing.as_ref().and_then(|np| np.track_index).or(self.pending_play_index);
+                    self.now_playing = Some(NowPlaying { artist, title, position_secs, duration_secs, paused: false, track_index });
                 }
-                PlayerEvent::Stopped | PlayerEvent::Ended => {
+                PlayerEvent::Stopped => {
                     self.now_playing = None;
+                    self.pending_play_index = None;
                     self.status = "Idle".to_string();
+                }
+                PlayerEvent::Ended => {
+                    self.play_next();
                 }
                 PlayerEvent::Position { position_secs, duration_secs } => {
                     if let Some(np) = self.now_playing.as_mut() {
@@ -172,8 +216,12 @@ impl GuiAppImpl {
                         if duration_secs.is_some() { np.duration_secs = duration_secs; }
                     }
                 }
+                PlayerEvent::Volume(vol) => {
+                    self.volume = vol;
+                }
                 PlayerEvent::Error(msg) => {
                     self.status = msg;
+                    self.pending_play_index = None;
                 }
             }
         }
@@ -225,16 +273,40 @@ impl eframe::App for GuiAppImpl {
             ui.horizontal(|ui| {
                 let np_text = if let Some(np) = &self.now_playing {
                     let dur = np.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-                    format!("now playing: {} - {}  {} / {}", np.artist, np.title, api::format_mm_ss(np.position_secs), dur)
+                    let pos = self.seek_drag.unwrap_or(np.position_secs);
+                    format!("now playing: {} - {}  {} / {}", np.artist, np.title, api::format_mm_ss(pos), dur)
                 } else {
                     "now playing: -".to_string()
                 };
                 ui.label(np_text);
+                if ui.button("Prev").clicked() { self.play_prev(); }
                 if ui.button(if self.now_playing.as_ref().map(|n| n.paused).unwrap_or(false) { "Resume" } else { "Pause" }).clicked() {
                     let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
                 }
-                if ui.button("Stop").clicked() {
-                    let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                if ui.button("Next").clicked() { self.play_next(); }
+                if ui.button("Stop").clicked() { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Volume");
+                let vol_resp = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.5).show_value(true));
+                if vol_resp.changed() || vol_resp.drag_stopped() {
+                    let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Seek");
+                let (pos, dur) = self.now_playing.as_ref()
+                    .map(|np| (self.seek_drag.unwrap_or(np.position_secs), np.duration_secs.unwrap_or(np.position_secs.max(1))))
+                    .unwrap_or((0, 1));
+                let mut seek_pos = pos.min(dur);
+                let seek_resp = ui.add_enabled(self.now_playing.is_some(), egui::Slider::new(&mut seek_pos, 0..=dur.max(1)).text("s").clamping(egui::SliderClamping::Always));
+                if seek_resp.changed() {
+                    self.seek_drag = Some(seek_pos);
+                }
+                if seek_resp.drag_stopped() {
+                    let target = self.seek_drag.unwrap_or(seek_pos);
+                    self.seek_drag = None;
+                    let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
                 }
             });
             ui.label(&self.status);
@@ -258,10 +330,11 @@ impl eframe::App for GuiAppImpl {
                         continue;
                     }
                     let line = self.tracks[i].display_line();
-                    let resp = ui.add(egui::Label::new(line).sense(egui::Sense::click()));
+                    let is_playing = self.now_playing.as_ref().and_then(|np| np.track_index) == Some(i);
+                    let text = if is_playing { egui::RichText::new(line).strong() } else { egui::RichText::new(line) };
+                    let resp = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
                     if resp.double_clicked() {
-                        let track = self.tracks[i].clone();
-                        let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
+                        self.play_index(i);
                     }
                 }
                 if range.end + 10 >= self.tracks.len() && !self.loading_tracks {
