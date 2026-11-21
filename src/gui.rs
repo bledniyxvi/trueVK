@@ -29,6 +29,13 @@ const REPEAT_TOOLTIP: &str = "\u{0420}\u{0435}\u{0436}\u{0438}\u{043C} \u{043F}\
 const SHUFFLE_TOOLTIP: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0438}\u{0442}\u{044C} \u{0432}\u{043E}\u{0441}\u{043F}\u{0440}\u{043E}\u{0438}\u{0437}\u{0432}\u{0435}\u{0434}\u{0435}\u{043D}\u{0438}\u{0435}";
 const MUTE_TOOLTIP: &str = "\u{0412}\u{044B}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
 const UNMUTE_TOOLTIP: &str = "\u{0412}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
+const MENU_TOOLTIP: &str = "\u{041C}\u{0435}\u{043D}\u{044E}";
+const LOGOUT_LABEL: &str = "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}";
+const FILTER_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{043F}\u{043E} \u{043C}\u{043E}\u{0435}\u{0439} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0438}";
+const TRACKS_SUFFIX: &str = " \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
+const TOP_BAR_H: f32 = 44.0;
+const TOP_TAB_GAP: f32 = 22.0;
+const TOP_MENU_SIZE: f32 = 28.0;
 const PANEL_MARGIN_X: f32 = 12.0;
 const PANEL_BOTTOM_MARGIN: f32 = 10.0;
 const PANEL_PROGRESS_HIT_H: f32 = 14.0;
@@ -193,19 +200,125 @@ fn measure_label_width(ui: &egui::Ui, text: &str, font: egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_owned(), font, theme::TEXT).rect.width()
 }
 
+fn draw_brand_mark(painter: &egui::Painter, rect: egui::Rect) {
+    let y = rect.center().y;
+    let x = rect.min.x;
+    let pts = vec![
+        egui::pos2(x, y),
+        egui::pos2(x + 3.0, y),
+        egui::pos2(x + 5.5, y - 5.0),
+        egui::pos2(x + 8.0, y + 4.0),
+        egui::pos2(x + 10.5, y),
+        egui::pos2(x + 13.5, y),
+        egui::pos2(x + 16.0, y - 5.0),
+        egui::pos2(x + 18.5, y + 4.0),
+        egui::pos2(x + 20.0, y),
+    ];
+    painter.line(pts.clone(), egui::epaint::PathStroke::new(1.6, theme::ACCENT));
+    painter.circle_filled(pts[0], 0.8, theme::ACCENT);
+    painter.circle_filled(*pts.last().unwrap(), 0.8, theme::ACCENT);
+}
+
+fn draw_magnifier(painter: &egui::Painter, center: egui::Pos2) {
+    let color = theme::MUTED;
+    painter.circle_stroke(egui::pos2(center.x - 3.0, center.y - 3.0), 4.0, egui::Stroke::new(1.3, color));
+    painter.line_segment(
+        [egui::pos2(center.x + 0.5, center.y + 0.5), egui::pos2(center.x + 5.5, center.y + 5.5)],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
+fn draw_clear_cross(painter: &egui::Painter, center: egui::Pos2) {
+    let color = theme::MUTED;
+    painter.line_segment(
+        [egui::pos2(center.x - 4.0, center.y - 4.0), egui::pos2(center.x + 4.0, center.y + 4.0)],
+        egui::Stroke::new(1.4, color),
+    );
+    painter.line_segment(
+        [egui::pos2(center.x + 4.0, center.y - 4.0), egui::pos2(center.x - 4.0, center.y + 4.0)],
+        egui::Stroke::new(1.4, color),
+    );
+}
+
+fn draw_menu_dots(painter: &egui::Painter, center: egui::Pos2, hovered: bool) {
+    let color = if hovered { theme::TEXT } else { theme::MUTED };
+    for dx in [-6.0, 0.0, 6.0] {
+        painter.circle_filled(egui::pos2(center.x + dx, center.y), 1.8, color);
+    }
+}
+
+fn text_tab(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str, font: egui::FontId, active: bool) -> bool {
+    let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
+    let hovered = resp.hovered();
+    let color = if active || hovered { theme::TEXT } else { theme::MUTED };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font, color);
+    if active {
+        let y = rect.max.y + 4.0;
+        let stroke = egui::Stroke::new(2.0, theme::ACCENT);
+        ui.painter().line_segment([egui::pos2(rect.min.x + 1.0, y), egui::pos2(rect.max.x - 1.0, y)], stroke);
+        ui.painter().circle_filled(egui::pos2(rect.min.x, y), 1.0, theme::ACCENT);
+        ui.painter().circle_filled(egui::pos2(rect.max.x, y), 1.0, theme::ACCENT);
+    }
+    if hovered {
+        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+fn styled_search_field(ui: &mut egui::Ui, rect: egui::Rect, value: &mut String, id: egui::Id, hint: &'static str) -> egui::Response {
+    let radius = egui::CornerRadius::same(8);
+    ui.painter().rect_filled(rect, radius, theme::SURFACE);
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x + 30.0, rect.min.y),
+        egui::pos2(rect.max.x - 10.0, rect.max.y),
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.set_min_height(rect.height());
+    let resp = child.add(
+        egui::TextEdit::singleline(value)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .desired_width(text_rect.width())
+            .hint_text(egui::RichText::new(hint).color(theme::MUTED)),
+    );
+    let focused = resp.has_focus();
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, if focused { theme::ACCENT } else { theme::BORDER }),
+        egui::StrokeKind::Middle,
+    );
+    draw_magnifier(ui.painter(), egui::pos2(rect.min.x + 16.0, rect.center().y));
+    resp
+}
+
+fn ghost_pill_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str) -> bool {
+    let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
+    let hovered = resp.hovered();
+    let radius = egui::CornerRadius::same(16);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, if hovered { theme::HOVER } else { theme::SURFACE });
+    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Middle);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold_font(12.0), if hovered { theme::TEXT } else { theme::MUTED });
+    if hovered {
+        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
 fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: TransportIcon, enabled: bool, tooltip: &str) -> bool {
     let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
     let hovered = resp.hovered() && enabled;
     let painter = ui.painter();
     let center = rect.center();
-    let is_play = matches!(icon, TransportIcon::Play);
-    if is_play {
+    let is_primary = matches!(icon, TransportIcon::Play | TransportIcon::Pause);
+    if is_primary {
         let fill = if enabled { theme::ACCENT } else { theme::ACCENT_DIM };
         painter.circle_filled(center, rect.width() * 0.5, fill);
     } else if hovered {
         painter.circle_filled(center, rect.width() * 0.5, theme::HOVER);
     }
-    let color = if is_play && enabled { theme::BG } else if enabled { theme::TEXT } else { theme::MUTED };
+    let color = if is_primary && enabled { theme::BG } else if enabled { theme::TEXT } else { theme::MUTED };
     match icon {
         TransportIcon::Prev => {
             let r = 6.0;
@@ -1378,14 +1491,27 @@ fn set_queue_for_my_music(&mut self) {
         });
     }
 
+    fn toggle_play_pause(&mut self) {
+        if self.now_playing.is_some() {
+            let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+        } else if self.restored_track.is_some() {
+            self.resolve_restored_track();
+        }
+    }
+
+    fn commit_seek(&mut self, target: u64) {
+        if let Some(np) = self.now_playing.as_mut() {
+            np.base_secs = target as f64;
+            np.started_at = if np.paused { None } else { Some(Instant::now()) };
+        }
+        self.seek_drag = None;
+        let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
+    }
+
     fn handle_media_hotkey(&mut self, kind: MediaHotkey) {
         match kind {
             MediaHotkey::PlayPause => {
-                if self.now_playing.is_some() {
-                    let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
-                } else if self.restored_track.is_some() {
-                    self.resolve_restored_track();
-                }
+                self.toggle_play_pause();
             }
             MediaHotkey::Stop => { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
             MediaHotkey::Next => { self.play_next(); }
@@ -1399,13 +1525,12 @@ fn set_queue_for_my_music(&mut self) {
         }
         let mut play_selected = false;
         let mut pause_resume = false;
-        let mut next = false;
-        let mut prev = false;
+        let mut seek_delta = None;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) { play_selected = true; }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Space) { pause_resume = true; }
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { next = true; }
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { prev = true; }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { seek_delta = Some(5); }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { seek_delta = Some(-5); }
         });
         if play_selected {
             if let Some((src, idx)) = self.selected_or_playing_for_current_list() {
@@ -1413,14 +1538,19 @@ fn set_queue_for_my_music(&mut self) {
             }
         }
         if pause_resume {
-            if self.now_playing.is_some() {
-                let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
-            } else if self.restored_track.is_some() {
-                self.resolve_restored_track();
+            self.toggle_play_pause();
+        }
+        if let Some(delta) = seek_delta {
+            let target = self.now_playing.as_ref().and_then(|np| {
+                np.duration_secs.filter(|&d| d > 0).map(|duration| {
+                    let pos = np.position_secs();
+                    (pos as i64 + delta).clamp(0, duration as i64) as u64
+                })
+            });
+            if let Some(target) = target {
+                self.commit_seek(target);
             }
         }
-        if next { self.play_next(); }
-        if prev { self.play_prev(); }
     }
     fn refresh_my_music_after_add(&mut self) {
         self.tracks.clear();
@@ -2099,20 +2229,6 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         });
     }
 
-    fn current_playing_matches(&self, source: QueueSource) -> bool {
-        match source {
-            QueueSource::MyMusic => self.queue_source == QueueSource::MyMusic,
-            QueueSource::Playlist => {
-                self.queue_source == QueueSource::Playlist
-                    && self.queue_playlist == self.selected_playlist.as_ref().map(|i| { let p=&self.playlists[*i]; (p.owner_id,p.id) })
-            }
-            QueueSource::Search => {
-                self.queue_source == QueueSource::Search
-                    && self.queue_search_query.as_deref() == Some(self.search_query.as_str())
-            }
-            QueueSource::Recommendations => self.queue_source == QueueSource::Recommendations,
-        }
-    }
 }
 
 impl eframe::App for GuiAppImpl {
@@ -2207,9 +2323,8 @@ impl eframe::App for GuiAppImpl {
                 }
                 let commit_seek = seek_clicked || (has_duration && seek_resp.drag_stopped());
                 if commit_seek {
-                    let target = self.seek_drag.take().unwrap_or(pos).min(dur);
-                    self.seek_drag = None;
-                    let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
+                    let target = self.seek_drag.unwrap_or(pos).min(dur);
+                    self.commit_seek(target);
                 }
 
                 let zones_top = top_y + PANEL_PROGRESS_HIT_H + 2.0;
@@ -2280,11 +2395,7 @@ impl eframe::App for GuiAppImpl {
                     self.play_prev();
                 }
                 if transport_button(ui, play_rect, "bottom.play", play_icon, play_enabled, play_tooltip) {
-                    if self.now_playing.is_some() {
-                        let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
-                    } else if self.restored_track.is_some() {
-                        self.resolve_restored_track();
-                    }
+                    self.toggle_play_pause();
                 }
                 if transport_button(ui, next_rect, "bottom.next", TransportIcon::Next, side_enabled, NEXT_TOOLTIP) {
                     self.play_next();
@@ -2445,30 +2556,87 @@ impl eframe::App for GuiAppImpl {
 
             self.ensure_my_user_id();
 
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "\u{041C}\u{043E}\u{044F} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0430}");
-                ui.selectable_value(&mut self.active_tab, Tab::Playlists, "\u{041F}\u{043B}\u{0435}\u{0439}\u{043B}\u{0438}\u{0441}\u{0442}\u{044B}");
-                ui.selectable_value(&mut self.active_tab, Tab::Search, "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A}");
-                ui.selectable_value(&mut self.active_tab, Tab::Recommendations, "\u{0420}\u{0435}\u{043A}\u{043E}\u{043C}\u{0435}\u{043D}\u{0434}\u{0430}\u{0446}\u{0438}\u{044F}");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Log out").clicked() {
-                        self.logout_to_login(None);
+            let (top_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), TOP_BAR_H), egui::Sense::hover());
+            ui.painter().rect_filled(top_rect, egui::CornerRadius::same(0), theme::PANEL);
+            ui.painter().line_segment(
+                [egui::pos2(top_rect.min.x, top_rect.max.y), egui::pos2(top_rect.max.x, top_rect.max.y)],
+                egui::Stroke::new(1.0, theme::BORDER),
+            );
+            draw_brand_mark(
+                ui.painter(),
+                egui::Rect::from_min_size(
+                    egui::pos2(top_rect.min.x + 12.0, top_rect.center().y - 10.0),
+                    egui::vec2(20.0, 20.0),
+                ),
+            );
+
+            let tab_font = theme::semibold_font(13.0);
+            let tab_y = top_rect.min.y + 4.0;
+            let tab_h = TOP_BAR_H - 12.0;
+            let mut tab_x = top_rect.min.x + 46.0;
+            let my_label = "\u{041C}\u{043E}\u{044F} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0430}";
+            let playlists_label = "\u{041F}\u{043B}\u{0435}\u{0439}\u{043B}\u{0438}\u{0441}\u{0442}\u{044B}";
+            let search_label = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A}";
+            let rec_label = "\u{0420}\u{0435}\u{043A}\u{043E}\u{043C}\u{0435}\u{043D}\u{0434}\u{0430}\u{0446}\u{0438}\u{0438}";
+            let labels = [my_label, playlists_label, search_label, rec_label];
+            let tabs = [Tab::MyMusic, Tab::Playlists, Tab::Search, Tab::Recommendations];
+            for (label, tab) in labels.iter().zip(tabs.iter()) {
+                let w = measure_label_width(ui, label, tab_font.clone()) + 12.0;
+                let rect = egui::Rect::from_min_size(egui::pos2(tab_x, tab_y), egui::vec2(w, tab_h));
+                if text_tab(ui, rect, label, label, tab_font.clone(), self.active_tab == *tab) {
+                    self.active_tab = *tab;
+                }
+                tab_x += w + TOP_TAB_GAP;
+            }
+
+            let mut logout_clicked = false;
+            let menu_rect = egui::Rect::from_center_size(
+                egui::pos2(top_rect.max.x - 20.0, top_rect.center().y),
+                egui::vec2(TOP_MENU_SIZE, TOP_MENU_SIZE),
+            );
+            let menu_resp = ui.interact(menu_rect, ui.make_persistent_id("top.menu"), egui::Sense::click());
+            draw_menu_dots(ui.painter(), menu_rect.center(), menu_resp.hovered());
+            let menu_resp = menu_resp.on_hover_text(MENU_TOOLTIP);
+            if menu_resp.hovered() {
+                menu_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+            }
+            egui::Popup::menu(&menu_resp)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    if ui.button(LOGOUT_LABEL).clicked() {
+                        ui.close();
+                        logout_clicked = true;
                     }
                 });
-            });
-            ui.separator();
+            if logout_clicked {
+                self.logout_to_login(None);
+            }
 
             let row_h = TRACK_ROW_HEIGHT;
             match self.active_tab {
                 Tab::MyMusic => {
                     if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }
                     let filter_before = self.my_filter.clone();
+                    let mut filter_rect = egui::Rect::NOTHING;
                     ui.horizontal(|ui| {
-                        let hint = "\u{0424}\u{0438}\u{043B}\u{044C}\u{0442}\u{0440}";
-                        let resp = ui.add(egui::TextEdit::singleline(&mut self.my_filter).hint_text(hint).desired_width(220.0));
-                        if !self.my_filter.is_empty() && ui.small_button("x").clicked() {
-                            self.my_filter.clear();
-                            resp.request_focus();
+                        let field_w = (ui.available_width() - 120.0).max(160.0);
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(field_w, 28.0), egui::Sense::hover());
+                        filter_rect = rect;
+                        let resp = styled_search_field(ui, rect, &mut self.my_filter, ui.scope_id().with("vkmusic.filter"), FILTER_HINT);
+                        if !self.my_filter.is_empty() {
+                            let clear_rect = egui::Rect::from_center_size(
+                                egui::pos2(rect.max.x + 18.0, rect.center().y),
+                                egui::vec2(24.0, 24.0),
+                            );
+                            let clear_resp = ui.interact(clear_rect, ui.make_persistent_id("filter.clear"), egui::Sense::click());
+                            draw_clear_cross(ui.painter(), clear_rect.center());
+                            if clear_resp.hovered() {
+                                clear_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                            }
+                            if clear_resp.clicked() {
+                                self.my_filter.clear();
+                                resp.request_focus();
+                            }
                         }
                     });
                     if self.my_filter != filter_before {
@@ -2479,7 +2647,15 @@ impl eframe::App for GuiAppImpl {
                     let filter_active = !self.my_filter.trim().is_empty();
                     let filtered = self.my_music_filtered();
                     let total = if filter_active { filtered.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
-                    let playing_tid = if self.current_playing_matches(QueueSource::MyMusic) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                    let count_text = format!("{}{}", total, TRACKS_SUFFIX);
+                    ui.painter().text(
+                        egui::pos2(filter_rect.max.x + 40.0, filter_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        count_text,
+                        theme::mono_font(12.0),
+                        theme::MUTED,
+                    );
+                    let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     if filter_active && filtered.is_empty() {
                         ui.add(egui::Label::new("\u{043D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{043D}\u{0430}\u{0439}\u{0434}\u{0435}\u{043D}\u{043E}").selectable(false));
                     } else {
@@ -2514,7 +2690,7 @@ impl eframe::App for GuiAppImpl {
                         if self.selected_playlist.is_some() {
                             if !self.playlist_status.is_empty() { ui.add(egui::Label::new(&self.playlist_status).selectable(false)); }
                             let total = self.playlist_tracks_count.unwrap_or(self.playlist_tracks.len() as u64) as usize;
-                            let playing_tid = if self.current_playing_matches(QueueSource::Playlist) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                            let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                             egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                                 let width = ui.available_width();
                                 for i in range.clone() {
@@ -2560,15 +2736,20 @@ impl eframe::App for GuiAppImpl {
                 }
                 Tab::Search => {
                     ui.horizontal(|ui| {
-                        let resp = ui.add(egui::TextEdit::singleline(&mut self.search_input).desired_width(ui.available_width() - 80.0));
+                        let button_w = 84.0;
+                        let field_w = (ui.available_width() - button_w - 12.0).max(160.0);
+                        let (field_rect, _) = ui.allocate_exact_size(egui::vec2(field_w, 30.0), egui::Sense::hover());
+                        let resp = styled_search_field(ui, field_rect, &mut self.search_input, ui.scope_id().with("vkmusic.search"), FILTER_HINT);
                         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button("\u{041D}\u{0430}\u{0439}\u{0442}\u{0438}").clicked() || enter {
+                        let (button_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 30.0), egui::Sense::hover());
+                        let clicked = ghost_pill_button(ui, button_rect, "search.find", "\u{041D}\u{0430}\u{0439}\u{0442}\u{0438}");
+                        if clicked || enter {
                             self.start_search();
                         }
                     });
                     if !self.search_status.is_empty() { ui.add(egui::Label::new(&self.search_status).selectable(false)); }
                     let total = self.search_count.unwrap_or(self.search_tracks.len() as u64) as usize;
-                    let playing_tid = if self.current_playing_matches(QueueSource::Search) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                    let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                         let width = ui.available_width();
                         for i in range.clone() {
@@ -2589,7 +2770,9 @@ impl eframe::App for GuiAppImpl {
                         self.request_recommendations(false);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}").clicked() && !self.rec_loading {
+                        let (button_rect, _) = ui.allocate_exact_size(egui::vec2(84.0, 30.0), egui::Sense::hover());
+                        let clicked = ghost_pill_button(ui, button_rect, "rec.refresh", "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}");
+                        if clicked && !self.rec_loading {
                             self.request_recommendations(true);
                         }
                         if self.rec_loading {
@@ -2599,7 +2782,7 @@ impl eframe::App for GuiAppImpl {
                     if !self.rec_status.is_empty() {
                         ui.add(egui::Label::new(&self.rec_status).selectable(false));
                     }
-                    let playing_tid = if self.current_playing_matches(QueueSource::Recommendations) { self.now_playing.as_ref().and_then(|np| np.track_id) } else { None };
+                    let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     let show_footer = self.rec_no_more || self.rec_loading || !self.rec_loaded_once;
                     let total = self.rec_tracks.len() + if show_footer { 1 } else { 0 };
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total.max(1), |ui, range| {
