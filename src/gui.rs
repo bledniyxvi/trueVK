@@ -4,6 +4,13 @@ use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    MyMusic,
+    Playlists,
+    Search,
+}
+
 struct NowPlaying {
     artist: String,
     title: String,
@@ -36,6 +43,11 @@ pub fn run_gui(token: Option<String>, ua: Option<String>) -> eframe::Result<()> 
 
     let mut options = eframe::NativeOptions::default();
     options.glow_options.vsync = true;
+    options.viewport = options
+        .viewport
+        .with_title("vkmusic")
+        .with_inner_size([520.0, 640.0])
+        .with_min_inner_size([400.0, 400.0]);
     eframe::run_native(
         "vkmusic",
         options,
@@ -73,6 +85,8 @@ struct GuiAppImpl {
     volume: f32,
     seek_drag: Option<u64>,
     pending_play_index: Option<usize>,
+    selected_index: Option<usize>,
+    active_tab: Tab,
     current_gen: u64,
     fps_enabled: bool,
     fps_passes: u64,
@@ -114,6 +128,8 @@ impl GuiAppImpl {
             volume: 1.0,
             seek_drag: None,
             pending_play_index: None,
+            selected_index: None,
+            active_tab: Tab::MyMusic,
             current_gen: 0,
             fps_enabled: std::env::var_os("VKMUSIC_FPS").as_deref() == Some(std::ffi::OsStr::new("1")),
             fps_passes: 0,
@@ -167,6 +183,7 @@ impl GuiAppImpl {
 
     fn play_index(&mut self, index: usize) {
         if index >= self.tracks.len() { return; }
+        self.selected_index = Some(index);
         self.pending_play_index = Some(index);
         let track = self.tracks[index].clone();
         let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
@@ -179,8 +196,49 @@ impl GuiAppImpl {
                 self.play_index(next);
             } else {
                 self.now_playing = None;
-                self.status = "Idle".to_string();
             }
+        }
+    }
+
+    fn selected_or_playing(&self) -> Option<usize> {
+        self.selected_index.or_else(|| self.now_playing.as_ref().and_then(|np| np.track_index))
+    }
+
+    fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let mut play_selected = false;
+        let mut pause_resume = false;
+        let mut next = false;
+        let mut prev = false;
+        ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                play_selected = true;
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Space) {
+                pause_resume = true;
+            }
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowRight) {
+                next = true;
+            }
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowLeft) {
+                prev = true;
+            }
+        });
+        if play_selected {
+            if let Some(idx) = self.selected_or_playing() {
+                self.play_index(idx);
+            }
+        }
+        if pause_resume {
+            let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+        }
+        if next {
+            self.play_next();
+        }
+        if prev {
+            self.play_prev();
         }
     }
 
@@ -201,7 +259,7 @@ impl GuiAppImpl {
                         self.tracks.extend(items);
                         if let Some(c) = count { self.tracks_count = Some(c); }
                         self.loading_tracks = false;
-                        self.status = format!("Tracks: {}", self.tracks.len());
+                        self.status.clear();
                     }
                 }
                 UiEvent::LoadError(msg) => {
@@ -237,7 +295,6 @@ impl GuiAppImpl {
                     self.now_playing = None;
                     self.pending_play_index = None;
                     self.current_gen = 0;
-                    self.status = "Idle".to_string();
                 }
                 PlayerEvent::Ended { generation } => {
                     if generation == self.current_gen {
@@ -252,7 +309,7 @@ impl GuiAppImpl {
                     }
                 }
                 PlayerEvent::Volume(vol) => {
-                    self.volume = vol;
+                    self.volume = vol.clamp(0.0, 1.0);
                 }
                 PlayerEvent::Error(msg) => {
                     self.status = msg;
@@ -311,6 +368,7 @@ impl eframe::App for GuiAppImpl {
             self.last_frame = Instant::now();
         }
         self.handle_events(&ctx);
+        self.handle_keyboard(&ctx);
         if self.fps_enabled {
             self.fps_passes += 1;
             if pass_index == 0 {
@@ -325,40 +383,35 @@ impl eframe::App for GuiAppImpl {
             }
         }
 
-        egui::Panel::bottom("bottom").show_inside(ui, |ui| {
+        egui::Panel::bottom("bottom").show(ui, |ui| {
+            let now_text = if let Some(np) = &self.now_playing {
+                format!("{} - {}", np.artist, np.title)
+            } else {
+                "ничего не играет".to_string()
+            };
+            ui.add(egui::Label::new(now_text).selectable(false));
+
             ui.horizontal(|ui| {
-                let np_text = if let Some(np) = &self.now_playing {
-                    let dur = np.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-                    let pos = self.seek_drag.unwrap_or(np.position_secs());
-                    format!("now playing: {} - {}  {} / {}", np.artist, np.title, api::format_mm_ss(pos), dur)
-                } else {
-                    "now playing: -".to_string()
-                };
-                ui.label(np_text);
-                if ui.button("Prev").clicked() { self.play_prev(); }
-                if ui.button(if self.now_playing.as_ref().map(|n| n.paused).unwrap_or(false) { "Resume" } else { "Pause" }).clicked() {
-                    let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
-                }
-                if ui.button("Next").clicked() { self.play_next(); }
-                if ui.button("Stop").clicked() { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Volume");
-                let vol_resp = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.5).show_value(true));
-                if vol_resp.changed() || vol_resp.drag_stopped() {
-                    let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Seek");
-                let (pos, dur) = self.now_playing.as_ref()
-                    .map(|np| {
-                        let p = np.position_secs();
-                        (self.seek_drag.unwrap_or(p), np.duration_secs.unwrap_or(p.max(1)))
-                    })
-                    .unwrap_or((0, 1));
-                let mut seek_pos = pos.min(dur);
-                let seek_resp = ui.add_enabled(self.now_playing.is_some(), egui::Slider::new(&mut seek_pos, 0..=dur.max(1)).text("s").clamping(egui::SliderClamping::Always));
+                let pos = self.now_playing.as_ref().map(|np| np.position_secs()).unwrap_or(0);
+                let dur = self
+                    .now_playing
+                    .as_ref()
+                    .and_then(|np| np.duration_secs)
+                    .unwrap_or(pos.max(1));
+                let shown_pos = self.seek_drag.unwrap_or(pos).min(dur.max(1));
+                ui.add(egui::Label::new(api::format_mm_ss(shown_pos)).selectable(false));
+                let mut seek_pos = shown_pos;
+                let dur_w = 44.0;
+                let slider_w = (ui.available_width() - dur_w - ui.spacing().item_spacing.x).max(40.0);
+                let old_slider_w = ui.spacing().slider_width;
+                ui.spacing_mut().slider_width = slider_w;
+                let seek_resp = ui.add_enabled(
+                    self.now_playing.is_some(),
+                    egui::Slider::new(&mut seek_pos, 0..=dur.max(1))
+                        .show_value(false)
+                        .clamping(egui::SliderClamping::Always),
+                );
+                ui.spacing_mut().slider_width = old_slider_w;
                 if seek_resp.changed() {
                     self.seek_drag = Some(seek_pos);
                 }
@@ -367,39 +420,138 @@ impl eframe::App for GuiAppImpl {
                     self.seek_drag = None;
                     let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
                 }
+                ui.add(egui::Label::new(api::format_mm_ss(dur)).selectable(false));
             });
-            ui.label(&self.status);
+
+            ui.horizontal(|ui| {
+                if ui.button("Prev").clicked() {
+                    self.play_prev();
+                }
+                let pause_label = if self.now_playing.as_ref().map(|n| n.paused).unwrap_or(false) {
+                    "Resume"
+                } else {
+                    "Pause"
+                };
+                if ui.button(pause_label).clicked() {
+                    let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+                }
+                if ui.button("Next").clicked() {
+                    self.play_next();
+                }
+                if ui.button("Stop").clicked() {
+                    let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let vol_resp = ui.add(
+                        egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                            .show_value(true)
+                            .custom_formatter(|v, _| format!("{}%", (v * 100.0).round().clamp(0.0, 100.0) as i32)),
+                    );
+                    if vol_resp.changed() || vol_resp.drag_stopped() {
+                        self.volume = self.volume.clamp(0.0, 1.0);
+                        let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
+                    }
+                    ui.add(egui::Label::new("Громкость").selectable(false));
+                });
+            });
+
+            if !self.status.is_empty() {
+                ui.add(egui::Label::new(&self.status).selectable(false));
+            }
         });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if !self.logged_in {
                 self.login_ui(ui);
                 return;
             }
-            ui.heading("My Music");
-            let row_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
-            let total = self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize;
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
-                for i in range.clone() {
-                    if i >= self.tracks.len() {
-                        if !self.loading_tracks {
-                            self.request_tracks_load();
-                        }
-                        ui.label("Loading...");
-                        continue;
-                    }
-                    let line = self.tracks[i].display_line();
-                    let is_playing = self.now_playing.as_ref().and_then(|np| np.track_index) == Some(i);
-                    let text = if is_playing { egui::RichText::new(line).strong() } else { egui::RichText::new(line) };
-                    let resp = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
-                    if resp.double_clicked() {
-                        self.play_index(i);
-                    }
-                }
-                if range.end + 10 >= self.tracks.len() && !self.loading_tracks {
-                    self.request_tracks_load();
-                }
+
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.active_tab, Tab::MyMusic, "Моя музыка");
+                ui.selectable_value(&mut self.active_tab, Tab::Playlists, "Плейлисты");
+                ui.selectable_value(&mut self.active_tab, Tab::Search, "Поиск");
             });
+            ui.separator();
+
+            match self.active_tab {
+                Tab::MyMusic => {
+                    let row_h = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(28.0);
+                    let total = self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize;
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show_rows(ui, row_h, total, |ui, range| {
+                            let width = ui.available_width();
+                            for i in range.clone() {
+                                if i >= self.tracks.len() {
+                                    if !self.loading_tracks {
+                                        self.request_tracks_load();
+                                    }
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(width, row_h),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.add(egui::Label::new("Loading...").selectable(false));
+                                        },
+                                    );
+                                    continue;
+                                }
+
+                                let is_selected = self.selected_index == Some(i);
+                                let is_playing = self.now_playing.as_ref().and_then(|np| np.track_index) == Some(i);
+                                let dur = self.tracks[i]
+                                    .duration_secs
+                                    .map(api::format_mm_ss)
+                                    .unwrap_or_else(|| "--:--".to_string());
+                                let idx_text = format!("{:>3}", i + 1);
+                                let title_text = format!("{} - {}", self.tracks[i].artist, self.tracks[i].title);
+                                let fill = if is_playing {
+                                    Some(ui.visuals().selection.bg_fill)
+                                } else if is_selected {
+                                    Some(ui.visuals().widgets.active.bg_fill.gamma_multiply(0.35))
+                                } else {
+                                    None
+                                };
+
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
+                                if let Some(fill) = fill {
+                                    ui.painter().rect_filled(rect, 0.0, fill);
+                                } else if resp.hovered() {
+                                    ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
+                                }
+
+                                let inner = rect.shrink2(egui::vec2(8.0, 0.0));
+                                let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                                row_ui.set_min_height(row_h);
+                                row_ui.add(egui::Label::new(egui::RichText::new(idx_text).monospace()).selectable(false));
+                                row_ui.add_space(8.0);
+                                let title = if is_playing {
+                                    egui::RichText::new(title_text).strong()
+                                } else {
+                                    egui::RichText::new(title_text)
+                                };
+                                row_ui.add(egui::Label::new(title).selectable(false).truncate());
+                                row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.add(egui::Label::new(dur).selectable(false));
+                                });
+
+                                if resp.clicked() {
+                                    self.selected_index = Some(i);
+                                }
+                                if resp.double_clicked() {
+                                    self.play_index(i);
+                                }
+                            }
+                            if range.end + 10 >= self.tracks.len() && !self.loading_tracks {
+                                self.request_tracks_load();
+                            }
+                        });
+                }
+                Tab::Playlists | Tab::Search => {
+                    ui.centered_and_justified(|ui| {
+                        ui.add(egui::Label::new("скоро").selectable(false));
+                    });
+                }
+            }
         });
     }
 }

@@ -2,7 +2,7 @@ use crate::api::{map_reqwest_error, sanitize_output, Track, PLAY_MAX_BYTES};
 use anyhow::{anyhow, Result};
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde_json::Value;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{Receiver, Sender},
@@ -95,7 +95,7 @@ fn worker_loop(
                 send_evt(&evt_tx, &ctx, PlayerEvent::Stopped);
             }
             PlayerCmd::SetVolume(vol) => {
-                volume = vol.clamp(0.0, 1.5);
+                volume = vol.clamp(0.0, 1.0);
                 if let Some(s) = state.as_ref() {
                     s.player.set_volume(volume);
                 }
