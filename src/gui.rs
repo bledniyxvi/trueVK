@@ -185,7 +185,12 @@ impl GuiAppImpl {
     fn login_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Login");
         ui.label("Paste full browser URL or access_token:");
-        ui.add(egui::TextEdit::singleline(&mut self.login_input).password(true).desired_width(f32::INFINITY));
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.login_input).password(true).desired_width(ui.available_width() - 60.0));
+            if ui.small_button("Paste").clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+        });
         ui.label("User-Agent:");
         ui.add(egui::TextEdit::singleline(&mut self.ua_input).desired_width(f32::INFINITY));
         if ui.button("Login").clicked() {
