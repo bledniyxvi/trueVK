@@ -36,6 +36,7 @@ fn run() -> Result<()> {
     let playlists_mode = args.iter().any(|arg| arg == "--playlists");
     let probe_mode = args.iter().any(|arg| arg == "--probe");
     let probe_bytes_mode = args.iter().any(|arg| arg == "--probe-bytes");
+    let probe_mix_mode = args.iter().any(|arg| arg == "--probe-mix");
     let search_query = arg_value(&args, "--search");
     let playlist_index = arg_value(&args, "--playlist");
     let play_index = arg_value(&args, "--play");
@@ -45,6 +46,7 @@ fn run() -> Result<()> {
         || playlists_mode
         || probe_mode
         || probe_bytes_mode
+        || probe_mix_mode
         || search_query.is_some()
         || playlist_index.is_some()
         || play_index.is_some();
@@ -77,6 +79,10 @@ fn run() -> Result<()> {
     }
     if probe_bytes_mode {
         run_probe_bytes(&client, &token)?;
+        return Ok(());
+    }
+    if probe_mix_mode {
+        run_probe_mix(&client, &token)?;
         return Ok(());
     }
     if let Some(query) = search_query {
@@ -234,6 +240,108 @@ fn run_probe_bytes(client: &reqwest::blocking::Client, token: &str) -> Result<()
         }
     }
     Ok(())
+}
+
+fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
+    use std::collections::HashSet;
+
+    println!("Probe-mix: read-only candidate method checks. No token/URLs printed.");
+    println!("Sources checked: vodka2/vk-audio-token src/examples/usage/example_kate.php (audio.getRecommendations with count,v); dev.vk.com/ru/method/audio.getRecommendations and /audio.getStreamMixAudios pages exist but JS-rendered, params not reliably extractable here; python273/vk_api/audio.py has no getRecommendations/getStreamMixAudios; local C:\\dev and cargo registry had no matches.");
+    println!("Not calling getStreamMixAudios/stream_mix_audios: method name seen on dev.vk.com URL only, no reliable param source found; will not invent params.");
+
+    let base: AudioGetResponse = api::vk_call(
+        client,
+        token,
+        "audio.get",
+        &[("count", TRACK_LIMIT.to_string().as_str())],
+    )?;
+    let base_items = base.items.unwrap_or_default();
+    let base_ids: HashSet<String> = base_items.iter().filter_map(track_id).collect();
+    println!("audio.get first page: count={} ids={}", base_items.len(), base_ids.len());
+
+    #[derive(Clone)]
+    struct Candidate {
+        method: &'static str,
+        params: Vec<(&'static str, String)>,
+        evidence: &'static str,
+    }
+
+    let candidates = vec![
+        Candidate {
+            method: "audio.getRecommendations",
+            params: vec![("count", "10".to_string())],
+            evidence: "vodka2/vk-audio-token src/examples/usage/example_kate.php",
+        },
+    ];
+
+    for cand in candidates {
+        let param_refs: Vec<(&str, &str)> = cand.params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        println!("---");
+        println!("method: {}", cand.method);
+        println!("evidence: {}", cand.evidence);
+        match api::vk_call::<Value>(client, token, cand.method, &param_refs) {
+            Ok(resp) => {
+                let items = extract_items(&resp);
+                let overlap = items.iter().filter_map(track_id).filter(|id| base_ids.contains(id)).count();
+                println!("ok: true");
+                println!("items: {}", items.len());
+                if let Some(first) = items.first() {
+                    println!("first_item_keys: {}", object_keys(first));
+                    let has_url = first.get("url").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false);
+                    println!("first_item_has_non_empty_url: {}", if has_url { "yes" } else { "no" });
+                } else {
+                    println!("first_item_keys: <none>");
+                    println!("first_item_has_non_empty_url: no");
+                }
+                println!("overlap_with_audio_get_first_page: {overlap}");
+                for (i, item) in items.iter().take(5).enumerate() {
+                    let artist = api::string_field(item, "artist");
+                    let title = api::string_field(item, "title");
+                    println!("top{}: {} - {}", i + 1, artist, title);
+                }
+            }
+            Err(err) => {
+                let msg = api::sanitize_output(&format!("{err:#}"));
+                let (code, emsg) = parse_vk_error_fields(&msg);
+                println!("ok: false");
+                println!("error_code: {code}");
+                println!("error_msg: {emsg}");
+                println!("items: 0");
+                println!("first_item_keys: <none>");
+                println!("first_item_has_non_empty_url: no");
+                println!("overlap_with_audio_get_first_page: 0");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_items(resp: &Value) -> Vec<Value> {
+    match resp {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(obj) => match obj.get("items") {
+            Some(Value::Array(arr)) => arr.clone(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn track_id(item: &Value) -> Option<String> {
+    let owner = item.get("owner_id").and_then(Value::as_i64)?;
+    let id = item.get("id").and_then(Value::as_i64)?;
+    Some(format!("{owner}_{id}"))
+}
+
+fn parse_vk_error_fields(msg: &str) -> (String, String) {
+    if let Some(rest) = msg.strip_prefix("VK API error ") {
+        if let Some((code, emsg)) = rest.split_once(": ") {
+            return (code.to_string(), emsg.to_string());
+        }
+        return (rest.to_string(), "<missing>".to_string());
+    }
+    ("<none>".to_string(), msg.to_string())
 }
 
 fn print_expires_remaining(item: &Value) {
