@@ -33,6 +33,19 @@ const MENU_TOOLTIP: &str = "\u{041C}\u{0435}\u{043D}\u{044E}";
 const LOGOUT_LABEL: &str = "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}";
 const FILTER_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{043F}\u{043E} \u{043C}\u{043E}\u{0435}\u{0439} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0438}";
 const TRACKS_SUFFIX: &str = " \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
+const LOADING_MORE_TEXT: &str = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0436}\u{0430}\u{044E} \u{0435}\u{0449}\u{0451}\u{2026}";
+const EMPTY_MY_MUSIC_MAIN: &str = "\u{043F}\u{0443}\u{0441}\u{0442}\u{043E}. \u{043A}\u{0430}\u{043A} \u{0432}\u{043D}\u{0443}\u{0442}\u{0440}\u{0438}.";
+const EMPTY_MY_MUSIC_SUB: &str = "\u{0434}\u{043E}\u{0431}\u{0430}\u{0432}\u{044C} \u{0447}\u{0442}\u{043E}-\u{043D}\u{0438}\u{0431}\u{0443}\u{0434}\u{044C} \u{0447}\u{0435}\u{0440}\u{0435}\u{0437} \u{043F}\u{043E}\u{0438}\u{0441}\u{043A}";
+const EMPTY_FILTER_MAIN: &str = "\u{043D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{043D}\u{0430}\u{0448}\u{043B}\u{043E}\u{0441}\u{044C}";
+const EMPTY_FILTER_SUB: &str = "\u{0442}\u{0430}\u{043A}\u{043E}\u{0433}\u{043E} \u{0443} \u{0442}\u{0435}\u{0431}\u{044F} \u{043D}\u{0435}\u{0442}";
+const EMPTY_SEARCH_IDLE_MAIN: &str = "\u{0447}\u{0442}\u{043E} \u{0438}\u{0449}\u{0435}\u{043C}?";
+const EMPTY_SEARCH_IDLE_SUB: &str = "\u{043D}\u{0430}\u{0437}\u{0432}\u{0430}\u{043D}\u{0438}\u{0435} \u{0438}\u{043B}\u{0438} \u{0430}\u{0440}\u{0442}\u{0438}\u{0441}\u{0442}";
+const EMPTY_SEARCH_NONE_MAIN: &str = "\u{043D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E}. \u{0434}\u{0430}\u{0436}\u{0435} \u{044D}\u{0445}\u{043E} \u{043C}\u{043E}\u{043B}\u{0447}\u{0438}\u{0442}.";
+const EMPTY_SEARCH_NONE_SUB: &str = "\u{043F}\u{043E}\u{043F}\u{0440}\u{043E}\u{0431}\u{0443}\u{0439} \u{043D}\u{0430}\u{043F}\u{0438}\u{0441}\u{0430}\u{0442}\u{044C} \u{0438}\u{043D}\u{0430}\u{0447}\u{0435}";
+const EMPTY_PLAYLISTS_MAIN: &str = "\u{043F}\u{043B}\u{0435}\u{0439}\u{043B}\u{0438}\u{0441}\u{0442}\u{043E}\u{0432} \u{043D}\u{0435}\u{0442}";
+const EMPTY_PLAYLISTS_SUB: &str = "\u{0441}\u{0442}\u{0440}\u{0430}\u{043D}\u{043D}\u{043E}, \u{043D}\u{043E} \u{043B}\u{0430}\u{0434}\u{043D}\u{043E}";
+const EMPTY_REC_NO_MORE_MAIN: &str = "\u{0431}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442}. \u{0432}\u{043E}\u{043E}\u{0431}\u{0449}\u{0435}.";
+const EMPTY_REC_NO_MORE_SUB: &str = "\u{043D}\u{0430}\u{0436}\u{043C}\u{0438} \u{00AB}\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}\u{00BB}, \u{0432}\u{0434}\u{0440}\u{0443}\u{0433} \u{043F}\u{043E}\u{0432}\u{0435}\u{0437}\u{0451}\u{0442}";
 const TOP_BAR_H: f32 = 44.0;
 const TOP_TAB_GAP: f32 = 22.0;
 const TOP_MENU_SIZE: f32 = 28.0;
@@ -200,23 +213,112 @@ fn measure_label_width(ui: &egui::Ui, text: &str, font: egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_owned(), font, theme::TEXT).rect.width()
 }
 
-fn draw_brand_mark(painter: &egui::Painter, rect: egui::Rect) {
+fn draw_heartbeat(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let sx = rect.width() / 20.0;
+    let sy = rect.height() / 20.0;
     let y = rect.center().y;
     let x = rect.min.x;
+    let point = |px: f32, py: f32| egui::pos2(x + px * sx, y + py * sy);
     let pts = vec![
-        egui::pos2(x, y),
-        egui::pos2(x + 3.0, y),
-        egui::pos2(x + 5.5, y - 5.0),
-        egui::pos2(x + 8.0, y + 4.0),
-        egui::pos2(x + 10.5, y),
-        egui::pos2(x + 13.5, y),
-        egui::pos2(x + 16.0, y - 5.0),
-        egui::pos2(x + 18.5, y + 4.0),
-        egui::pos2(x + 20.0, y),
+        point(0.0, 0.0),
+        point(3.0, 0.0),
+        point(5.5, -5.0),
+        point(8.0, 4.0),
+        point(10.5, 0.0),
+        point(13.5, 0.0),
+        point(16.0, -5.0),
+        point(18.5, 4.0),
+        point(20.0, 0.0),
     ];
-    painter.line(pts.clone(), egui::epaint::PathStroke::new(1.6, theme::ACCENT));
-    painter.circle_filled(pts[0], 0.8, theme::ACCENT);
-    painter.circle_filled(*pts.last().unwrap(), 0.8, theme::ACCENT);
+    painter.line(pts.clone(), egui::epaint::PathStroke::new(1.6 * sy, color));
+    painter.circle_filled(pts[0], 0.8 * sy, color);
+    painter.circle_filled(*pts.last().unwrap(), 0.8 * sy, color);
+}
+
+fn draw_brand_mark(painter: &egui::Painter, rect: egui::Rect) {
+    draw_heartbeat(painter, rect, theme::ACCENT);
+}
+
+fn draw_empty_state(ui: &mut egui::Ui, rect: egui::Rect, main: &str, sub: Option<&str>) {
+    let painter = ui.painter_at(rect);
+    let center_x = rect.center().x;
+    let center_y = rect.min.y + rect.height() * 0.4;
+    let icon_color = theme::BORDER.lerp_to_gamma(theme::TEXT, 0.45);
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(center_x, center_y - 24.0),
+        egui::vec2(56.0, 36.0),
+    );
+    draw_heartbeat(&painter, icon_rect, icon_color);
+    painter.text(
+        egui::pos2(center_x, center_y + 10.0),
+        egui::Align2::CENTER_CENTER,
+        main,
+        theme::semibold_font(16.0),
+        theme::TEXT,
+    );
+    if let Some(sub) = sub {
+        painter.text(
+            egui::pos2(center_x, center_y + 32.0),
+            egui::Align2::CENTER_CENTER,
+            sub,
+            egui::FontId::proportional(12.0),
+            theme::MUTED,
+        );
+    }
+}
+
+fn draw_skeleton_rows(ui: &mut egui::Ui, rect: egui::Rect, row_h: f32) {
+    let painter = ui.painter_at(rect);
+    let widths = [0.42, 0.55, 0.34, 0.48, 0.30, 0.52, 0.38, 0.50, 0.33];
+    let sub_widths = [0.24, 0.27, 0.21, 0.26, 0.20, 0.30, 0.23, 0.25, 0.22];
+    let radius = egui::CornerRadius::same(4);
+    let inset = 10.0;
+    let number_w = 30.0;
+    let duration_w = 38.0;
+    let text_left = rect.min.x + inset + 44.0;
+    let text_w = (rect.width() - inset * 2.0 - 44.0 - duration_w - 12.0).max(80.0);
+    for i in 0..9 {
+        let cy = rect.min.y + row_h * (i as f32) + row_h * 0.5;
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.min.x + inset + number_w * 0.5, cy),
+                egui::vec2(number_w, 8.0),
+            ),
+            radius,
+            theme::SURFACE,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(text_left, cy - 10.0),
+                egui::vec2(text_w * widths[i % widths.len()], 10.0),
+            ),
+            radius,
+            theme::SURFACE,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(text_left, cy + 6.0),
+                egui::vec2(text_w * sub_widths[i % sub_widths.len()], 8.0),
+            ),
+            radius,
+            theme::SURFACE,
+        );
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.max.x - inset - duration_w * 0.5, cy),
+                egui::vec2(duration_w, 8.0),
+            ),
+            radius,
+            theme::SURFACE,
+        );
+    }
+}
+
+fn status_is_error(text: &str) -> bool {
+    text.contains(FILTER_AUTOLOAD_ERROR_TEXT)
+        || text.contains(PLAYER_CHANNEL_CLOSED_TEXT)
+        || text.contains("error")
+        || text.contains("unavailable")
 }
 
 fn draw_magnifier(painter: &egui::Painter, center: egui::Pos2) {
@@ -1993,6 +2095,30 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         }
     }
 
+    fn status_line(&mut self, ui: &mut egui::Ui, text: &str, is_error: bool) {
+        if text.is_empty() {
+            return;
+        }
+        self.ensure_cjk_font(ui.ctx(), text);
+        let indent = if is_error { 9.0 } else { 0.0 };
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2((ui.available_width() - indent).max(1.0), 16.0),
+            egui::Sense::hover(),
+        );
+        let color = if is_error { theme::WARN } else { theme::MUTED };
+        if is_error {
+            let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+            ui.painter().rect_filled(bar, egui::CornerRadius::same(0), theme::WARN);
+        }
+        let text_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + indent, rect.min.y),
+            rect.max,
+        );
+        let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        text_ui.set_min_height(rect.height());
+        text_ui.add(egui::Label::new(egui::RichText::new(text.to_owned()).size(11.0).color(color)).selectable(false).truncate());
+    }
+
     fn render_track_row(&mut self, ui: &mut egui::Ui, i: usize, track: &Track, width: f32, row_h: f32, source: QueueSource, playing_in_this_list: bool) {
         let is_playing = playing_in_this_list;
         let playable = track.is_playable();
@@ -2538,14 +2664,7 @@ impl eframe::App for GuiAppImpl {
                     status_parts.push(status);
                 }
                 let status = status_parts.join(" | ");
-                if !status.is_empty() {
-                    let status_rect = egui::Rect::from_min_size(
-                        egui::pos2(content.min.x, content.max.y - 12.0),
-                        egui::vec2(content.width(), 12.0),
-                    );
-                    let mut status_ui = ui.new_child(egui::UiBuilder::new().max_rect(status_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-                    status_ui.add(egui::Label::new(egui::RichText::new(status).size(11.0).color(theme::MUTED)).selectable(false).truncate());
-                }
+                self.status_line(ui, &status, status_is_error(&status));
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -2615,7 +2734,9 @@ impl eframe::App for GuiAppImpl {
             let row_h = TRACK_ROW_HEIGHT;
             match self.active_tab {
                 Tab::MyMusic => {
-                    if !self.my_status.is_empty() { ui.add(egui::Label::new(&self.my_status).selectable(false)); }
+                    let my_status_error = status_is_error(&self.my_status);
+                    let my_status = self.my_status.clone();
+                    self.status_line(ui, &my_status, my_status_error);
                     let filter_before = self.my_filter.clone();
                     let mut filter_rect = egui::Rect::NOTHING;
                     ui.horizontal(|ui| {
@@ -2648,25 +2769,33 @@ impl eframe::App for GuiAppImpl {
                     let filtered = self.my_music_filtered();
                     let total = if filter_active { filtered.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
                     let count_text = format!("{}{}", total, TRACKS_SUFFIX);
+                    let count_w = measure_label_width(ui, &count_text, theme::mono_font(12.0));
+                    let count_x = ui.available_rect_before_wrap().max.x - 12.0 - count_w;
                     ui.painter().text(
-                        egui::pos2(filter_rect.max.x + 40.0, filter_rect.center().y),
+                        egui::pos2(count_x, filter_rect.center().y),
                         egui::Align2::LEFT_CENTER,
                         count_text,
                         theme::mono_font(12.0),
                         theme::MUTED,
                     );
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
-                    if filter_active && filtered.is_empty() {
-                        ui.add(egui::Label::new("\u{043D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{043D}\u{0430}\u{0439}\u{0434}\u{0435}\u{043D}\u{043E}").selectable(false));
+                    let list_rect = ui.available_rect_before_wrap();
+                    let first_page = self.tracks.is_empty() && (self.loading_tracks || self.tracks_count.is_none());
+                    let filter_no_matches = filter_active && filtered.is_empty();
+                    let library_empty = !filter_active && self.tracks.is_empty();
+                    if filter_no_matches && !self.loading_tracks && !my_status_error {
+                        draw_empty_state(ui, list_rect, EMPTY_FILTER_MAIN, Some(EMPTY_FILTER_SUB));
+                    } else if first_page && !my_status_error {
+                        if !filter_active && !self.loading_tracks && total > self.tracks.len() { self.request_tracks_load(); }
+                        draw_skeleton_rows(ui, list_rect, row_h);
+                    } else if library_empty && !self.loading_tracks && !my_status_error {
+                        draw_empty_state(ui, list_rect, EMPTY_MY_MUSIC_MAIN, Some(EMPTY_MY_MUSIC_SUB));
                     } else {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                             let width = ui.available_width();
                             for row in range.clone() {
                                 let Some((i, track)) = (if filter_active { filtered.get(row).cloned() } else { self.tracks.get(row).cloned().map(|t| (row, t)) }) else {
                                     if !filter_active && !self.loading_tracks { self.request_tracks_load(); }
-                                    if !filter_active {
-                                        ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("...").selectable(false)); });
-                                    }
                                     continue;
                                 };
                                 let playing_here = playing_tid == Some(TrackId::from_track(&track));
@@ -2674,6 +2803,9 @@ impl eframe::App for GuiAppImpl {
                             }
                             if !filter_active && range.end + 10 >= self.tracks.len() && !self.loading_tracks { self.request_tracks_load(); }
                         });
+                    }
+                    if !self.tracks.is_empty() && self.loading_tracks {
+                        self.status_line(ui, LOADING_MORE_TEXT, false);
                     }
                 }
                 Tab::Playlists => {
@@ -2688,50 +2820,74 @@ impl eframe::App for GuiAppImpl {
                             ui.add(egui::Label::new(egui::RichText::new(pl_title).strong()).selectable(false));
                         });
                         if self.selected_playlist.is_some() {
-                            if !self.playlist_status.is_empty() { ui.add(egui::Label::new(&self.playlist_status).selectable(false)); }
+                            let playlist_status_error = status_is_error(&self.playlist_status);
+                            let playlist_status = self.playlist_status.clone();
+                            self.status_line(ui, &playlist_status, playlist_status_error);
                             let total = self.playlist_tracks_count.unwrap_or(self.playlist_tracks.len() as u64) as usize;
                             let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
-                            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
-                                let width = ui.available_width();
-                                for i in range.clone() {
-                                    if i >= self.playlist_tracks.len() {
-                                        if !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
-                                        ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
-                                        continue;
+                            let list_rect = ui.available_rect_before_wrap();
+                            let first_page = self.playlist_tracks.is_empty()
+                                && (self.loading_playlist_tracks || self.playlist_tracks_count.is_none());
+                            if first_page && !playlist_status_error {
+                                draw_skeleton_rows(ui, list_rect, row_h);
+                            } else {
+                                egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
+                                    let width = ui.available_width();
+                                    for i in range.clone() {
+                                        if i >= self.playlist_tracks.len() {
+                                            if !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
+                                            continue;
+                                        }
+                                        let track = self.playlist_tracks[i].clone();
+                                        let playing_here = playing_tid == Some(TrackId::from_track(&track));
+                                        self.render_track_row(ui, i, &track, width, row_h, QueueSource::Playlist, playing_here);
                                     }
-                                    let track = self.playlist_tracks[i].clone();
-                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
-                                    self.render_track_row(ui, i, &track, width, row_h, QueueSource::Playlist, playing_here);
-                                }
-                                if range.end + 10 >= self.playlist_tracks.len() && !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
-                            });
+                                    if range.end + 10 >= self.playlist_tracks.len() && !self.loading_playlist_tracks { self.request_playlist_tracks_load(); }
+                                });
+                            }
+                            if !self.playlist_tracks.is_empty() && self.loading_playlist_tracks {
+                                self.status_line(ui, LOADING_MORE_TEXT, false);
+                            }
                         }
                     } else {
                         if self.playlists.is_empty() && !self.loading_playlists && self.playlists_count.is_none() {
                             self.request_playlists_load();
                         }
-                        if !self.playlists_status.is_empty() { ui.add(egui::Label::new(&self.playlists_status).selectable(false)); }
+                        let playlists_status_error = status_is_error(&self.playlists_status);
+                        let playlists_status = self.playlists_status.clone();
+                        self.status_line(ui, &playlists_status, playlists_status_error);
                         let total = self.playlists_count.unwrap_or(self.playlists.len() as u64) as usize;
-                        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
-                            let width = ui.available_width();
-                            for i in range.clone() {
-                                if i >= self.playlists.len() {
-                                    if !self.loading_playlists { self.request_playlists_load(); }
-                                    ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
-                                    continue;
+                        let list_rect = ui.available_rect_before_wrap();
+                        let first_page = self.playlists.is_empty()
+                            && (self.loading_playlists || self.playlists_count.is_none());
+                        if first_page && !playlists_status_error {
+                            draw_skeleton_rows(ui, list_rect, row_h);
+                        } else if self.playlists.is_empty() && !self.loading_playlists && !playlists_status_error {
+                            draw_empty_state(ui, list_rect, EMPTY_PLAYLISTS_MAIN, Some(EMPTY_PLAYLISTS_SUB));
+                        } else {
+                            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
+                                let width = ui.available_width();
+                                for i in range.clone() {
+                                    if i >= self.playlists.len() {
+                                        if !self.loading_playlists { self.request_playlists_load(); }
+                                        continue;
+                                    }
+                                    let pl = self.playlists[i].clone();
+                                    let count_txt = pl.count.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
+                                    let line = format!("{} ({})", pl.title, count_txt);
+                                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
+                                    if resp.hovered() { ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill); }
+                                    let inner = rect.shrink2(egui::vec2(8.0, 0.0));
+                                    let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                                    row_ui.add(egui::Label::new(line).selectable(false).truncate());
+                                    if resp.clicked() { self.open_playlist(i); }
                                 }
-                                let pl = self.playlists[i].clone();
-                                let count_txt = pl.count.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
-                                let line = format!("{} ({})", pl.title, count_txt);
-                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
-                                if resp.hovered() { ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill); }
-                                let inner = rect.shrink2(egui::vec2(8.0, 0.0));
-                                let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
-                                row_ui.add(egui::Label::new(line).selectable(false).truncate());
-                                if resp.clicked() { self.open_playlist(i); }
-                            }
-                            if range.end + 10 >= self.playlists.len() && !self.loading_playlists { self.request_playlists_load(); }
-                        });
+                                if range.end + 10 >= self.playlists.len() && !self.loading_playlists { self.request_playlists_load(); }
+                            });
+                        }
+                        if !self.playlists.is_empty() && self.loading_playlists {
+                            self.status_line(ui, LOADING_MORE_TEXT, false);
+                        }
                     }
                 }
                 Tab::Search => {
@@ -2747,23 +2903,42 @@ impl eframe::App for GuiAppImpl {
                             self.start_search();
                         }
                     });
-                    if !self.search_status.is_empty() { ui.add(egui::Label::new(&self.search_status).selectable(false)); }
+                    let search_status_error = status_is_error(&self.search_status);
+                    let search_status = self.search_status.clone();
+                    self.status_line(ui, &search_status, search_status_error);
                     let total = self.search_count.unwrap_or(self.search_tracks.len() as u64) as usize;
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
-                        let width = ui.available_width();
-                        for i in range.clone() {
-                            if i >= self.search_tracks.len() {
-                                if !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
-                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false)); });
-                                continue;
+                    let list_rect = ui.available_rect_before_wrap();
+                    let query_empty = self.search_input.trim().is_empty() && self.search_query.trim().is_empty();
+                    let first_page = !query_empty && self.search_tracks.is_empty()
+                        && (self.loading_search || self.search_count.is_none());
+                    let no_results = !query_empty && self.search_tracks.is_empty() && !self.loading_search
+                        && self.search_count.is_some() && !search_status_error;
+                    if query_empty && self.search_tracks.is_empty() && !self.loading_search && !search_status_error {
+                        draw_empty_state(ui, list_rect, EMPTY_SEARCH_IDLE_MAIN, Some(EMPTY_SEARCH_IDLE_SUB));
+                    } else if first_page && !search_status_error {
+                        if !self.loading_search && !self.search_query.trim().is_empty() && total > self.search_tracks.len() { self.request_search_load(); }
+                        draw_skeleton_rows(ui, list_rect, row_h);
+                    } else if no_results {
+                        draw_empty_state(ui, list_rect, EMPTY_SEARCH_NONE_MAIN, Some(EMPTY_SEARCH_NONE_SUB));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
+                            let width = ui.available_width();
+                            for i in range.clone() {
+                                if i >= self.search_tracks.len() {
+                                    if !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
+                                    continue;
+                                }
+                                let track = self.search_tracks[i].clone();
+                                let playing_here = playing_tid == Some(TrackId::from_track(&track));
+                                self.render_track_row(ui, i, &track, width, row_h, QueueSource::Search, playing_here);
                             }
-                            let track = self.search_tracks[i].clone();
-                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
-                            self.render_track_row(ui, i, &track, width, row_h, QueueSource::Search, playing_here);
-                        }
-                        if range.end + 10 >= self.search_tracks.len() && !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
-                    });
+                            if range.end + 10 >= self.search_tracks.len() && !self.loading_search && !self.search_query.trim().is_empty() { self.request_search_load(); }
+                        });
+                    }
+                    if !self.search_tracks.is_empty() && self.loading_search {
+                        self.status_line(ui, LOADING_MORE_TEXT, false);
+                    }
                 }
                 Tab::Recommendations => {
                     if !self.rec_loaded_once && !self.rec_loading {
@@ -2775,35 +2950,40 @@ impl eframe::App for GuiAppImpl {
                         if clicked && !self.rec_loading {
                             self.request_recommendations(true);
                         }
-                        if self.rec_loading {
-                            ui.add(egui::Label::new("\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...").selectable(false));
-                        }
                     });
-                    if !self.rec_status.is_empty() {
-                        ui.add(egui::Label::new(&self.rec_status).selectable(false));
+                    let rec_status_error = status_is_error(&self.rec_status);
+                    let rec_no_more_empty = self.rec_no_more
+                        && self.rec_tracks.is_empty()
+                        && !self.rec_loading
+                        && !rec_status_error;
+                    if !rec_no_more_empty {
+                        let rec_status = self.rec_status.clone();
+                        self.status_line(ui, &rec_status, rec_status_error);
                     }
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
-                    let show_footer = self.rec_no_more || self.rec_loading || !self.rec_loaded_once;
-                    let total = self.rec_tracks.len() + if show_footer { 1 } else { 0 };
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total.max(1), |ui, range| {
-                        let width = ui.available_width();
-                        for i in range.clone() {
-                            if i >= self.rec_tracks.len() {
-                                let label = if self.rec_no_more { "\u{0431}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442}" } else { "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}..." };
-                                if !self.rec_no_more && !self.rec_loading && self.rec_loaded_once {
-                                    self.request_recommendations_more();
-                                }
-                                ui.allocate_ui_with_layout(egui::vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.add(egui::Label::new(label).selectable(false)); });
-                                continue;
+                    let list_rect = ui.available_rect_before_wrap();
+                    let first_page = !self.rec_loaded_once && self.rec_tracks.is_empty();
+                    if first_page && !rec_status_error {
+                        draw_skeleton_rows(ui, list_rect, row_h);
+                    } else if rec_no_more_empty {
+                        draw_empty_state(ui, list_rect, EMPTY_REC_NO_MORE_MAIN, Some(EMPTY_REC_NO_MORE_SUB));
+                    } else {
+                        let total = self.rec_tracks.len();
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
+                            let width = ui.available_width();
+                            for i in range.clone() {
+                                let track = self.rec_tracks[i].clone();
+                                let playing_here = playing_tid == Some(TrackId::from_track(&track));
+                                self.render_track_row(ui, i, &track, width, row_h, QueueSource::Recommendations, playing_here);
                             }
-                            let track = self.rec_tracks[i].clone();
-                            let playing_here = playing_tid == Some(TrackId::from_track(&track));
-                            self.render_track_row(ui, i, &track, width, row_h, QueueSource::Recommendations, playing_here);
-                        }
-                        if self.rec_loaded_once && !self.rec_no_more && !self.rec_loading && range.end + 5 >= self.rec_tracks.len() {
-                            self.request_recommendations_more();
-                        }
-                    });
+                            if self.rec_loaded_once && !self.rec_no_more && !self.rec_loading && range.end + 5 >= self.rec_tracks.len() {
+                                self.request_recommendations_more();
+                            }
+                        });
+                    }
+                    if !self.rec_tracks.is_empty() && self.rec_loading {
+                        self.status_line(ui, LOADING_MORE_TEXT, false);
+                    }
                 }
             }
         });
