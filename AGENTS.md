@@ -14,6 +14,7 @@ Path: C:\dev\vkmusic. Shell: PowerShell on Windows 11. The user writes in Russia
 7. If something does not fit (crate, API, approach): STOP and report. Do not silently fall back (e.g. no plaintext token file).
 8. Unsure = say "not verified". Never invent VK API parameters; give the source of each.
 9. Commit after each stage with the message given in the task, then STOP.
+10. CYRILLIC: write every Russian UI string in Rust source with \u{...} escapes, or verify with `Select-String -Path src\*.rs -Pattern '"\?{3,}'` after writing. Literal "???" in source is a bug.
 
 ## Files
 - src/main.rs: flag dispatcher. No arguments = GUI. Flags: --gui, --shape, --playlists, --probe, --probe-bytes, --probe-mix, --search, --playlist, --play n [--seconds s].
