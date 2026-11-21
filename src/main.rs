@@ -245,9 +245,17 @@ fn run_probe_bytes(client: &reqwest::blocking::Client, token: &str) -> Result<()
 fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
     use std::collections::HashSet;
 
-    println!("Probe-mix: read-only candidate method checks. No token/URLs printed.");
-    println!("Sources checked: vodka2/vk-audio-token src/examples/usage/example_kate.php (audio.getRecommendations with count,v); dev.vk.com/ru/method/audio.getRecommendations and /audio.getStreamMixAudios pages exist but JS-rendered, params not reliably extractable here; python273/vk_api/audio.py has no getRecommendations/getStreamMixAudios; local C:\\dev and cargo registry had no matches.");
-    println!("Not calling getStreamMixAudios/stream_mix_audios: method name seen on dev.vk.com URL only, no reliable param source found; will not invent params.");
+    #[cfg(windows)]
+    unsafe {
+        // Set console output to UTF-8 for readable Cyrillic in "artist - title".
+        unsafe extern "system" {
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+        }
+        let _ = SetConsoleOutputCP(65001);
+    }
+
+    println!("Probe-mix: read-only audio.getRecommendations checks. No token/URLs printed.");
+    println!("Source: vodka2/vk-audio-token src/examples/usage/example_kate.php shows audio.getRecommendations with count,v. dev.vk.com pages JS-rendered; no reliable extra params extracted. Not inventing params.");
 
     let base: AudioGetResponse = api::vk_call(
         client,
@@ -259,58 +267,91 @@ fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> 
     let base_ids: HashSet<String> = base_items.iter().filter_map(track_id).collect();
     println!("audio.get first page: count={} ids={}", base_items.len(), base_ids.len());
 
-    #[derive(Clone)]
-    struct Candidate {
-        method: &'static str,
-        params: Vec<(&'static str, String)>,
-        evidence: &'static str,
+    // 1) Three calls in a row, count=10, overlap 1-2,2-3,1-3.
+    println!("--- three_calls_count_10 ---");
+    let mut calls: Vec<Vec<Value>> = Vec::new();
+    for i in 0..3 {
+        let resp = api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]);
+        match resp {
+            Ok(v) => {
+                let items = extract_items(&v);
+                println!("call{} ok=true items={}", i + 1, items.len());
+                calls.push(items);
+            }
+            Err(e) => {
+                let msg = api::sanitize_output(&format!("{e:#}"));
+                let (code, emsg) = parse_vk_error_fields(&msg);
+                println!("call{} ok=false error_code={} error_msg={}", i + 1, code, emsg);
+                calls.push(Vec::new());
+            }
+        }
+    }
+    let ids0: HashSet<String> = calls.get(0).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
+    let ids1: HashSet<String> = calls.get(1).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
+    let ids2: HashSet<String> = calls.get(2).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
+    println!("overlap_call1_call2: {}", ids0.intersection(&ids1).count());
+    println!("overlap_call2_call3: {}", ids1.intersection(&ids2).count());
+    println!("overlap_call1_call3: {}", ids0.intersection(&ids2).count());
+
+    // 2) count=50, items count and unique ids.
+    println!("--- count_50 ---");
+    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "50")]) {
+        Ok(v) => {
+            let items = extract_items(&v);
+            let unique: HashSet<String> = items.iter().filter_map(track_id).collect();
+            println!("ok=true items={} unique_ids={}", items.len(), unique.len());
+        }
+        Err(e) => {
+            let msg = api::sanitize_output(&format!("{e:#}"));
+            let (code, emsg) = parse_vk_error_fields(&msg);
+            println!("ok=false error_code={} error_msg={} items=0 unique_ids=0", code, emsg);
+        }
     }
 
-    let candidates = vec![
-        Candidate {
-            method: "audio.getRecommendations",
-            params: vec![("count", "10".to_string())],
-            evidence: "vodka2/vk-audio-token src/examples/usage/example_kate.php",
-        },
-    ];
+    // 3) count=10 offset=10, overlap with call 1.
+    println!("--- count_10_offset_10 ---");
+    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10"), ("offset", "10")]) {
+        Ok(v) => {
+            let items = extract_items(&v);
+            let off_ids: HashSet<String> = items.iter().filter_map(track_id).collect();
+            println!("ok=true items={} overlap_with_call1={}", items.len(), off_ids.intersection(&ids0).count());
+        }
+        Err(e) => {
+            let msg = api::sanitize_output(&format!("{e:#}"));
+            let (code, emsg) = parse_vk_error_fields(&msg);
+            println!("ok=false error_code={} error_msg={}", code, emsg);
+        }
+    }
 
-    for cand in candidates {
-        let param_refs: Vec<(&str, &str)> = cand.params.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        println!("---");
-        println!("method: {}", cand.method);
-        println!("evidence: {}", cand.evidence);
-        match api::vk_call::<Value>(client, token, cand.method, &param_refs) {
-            Ok(resp) => {
-                let items = extract_items(&resp);
-                let overlap = items.iter().filter_map(track_id).filter(|id| base_ids.contains(id)).count();
-                println!("ok: true");
-                println!("items: {}", items.len());
-                if let Some(first) = items.first() {
-                    println!("first_item_keys: {}", object_keys(first));
-                    let has_url = first.get("url").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false);
-                    println!("first_item_has_non_empty_url: {}", if has_url { "yes" } else { "no" });
-                } else {
-                    println!("first_item_keys: <none>");
-                    println!("first_item_has_non_empty_url: no");
+    // 4) Top-level keys of response object (not only items).
+    println!("--- response_top_level_keys ---");
+    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]) {
+        Ok(v) => {
+            match &v {
+                Value::Object(obj) => {
+                    let mut keys: Vec<&String> = obj.keys().collect();
+                    keys.sort();
+                    let joined = keys.into_iter().map(String::as_str).collect::<Vec<_>>().join(",");
+                    println!("ok=true top_level_keys={}", joined);
                 }
-                println!("overlap_with_audio_get_first_page: {overlap}");
-                for (i, item) in items.iter().take(5).enumerate() {
-                    let artist = api::string_field(item, "artist");
-                    let title = api::string_field(item, "title");
-                    println!("top{}: {} - {}", i + 1, artist, title);
+                Value::Array(_) => {
+                    println!("ok=true top_level_keys=<array_response>");
+                }
+                _ => {
+                    println!("ok=true top_level_keys=<non_object>");
                 }
             }
-            Err(err) => {
-                let msg = api::sanitize_output(&format!("{err:#}"));
-                let (code, emsg) = parse_vk_error_fields(&msg);
-                println!("ok: false");
-                println!("error_code: {code}");
-                println!("error_msg: {emsg}");
-                println!("items: 0");
-                println!("first_item_keys: <none>");
-                println!("first_item_has_non_empty_url: no");
-                println!("overlap_with_audio_get_first_page: 0");
+            let items = extract_items(&v);
+            for (i, item) in items.iter().take(5).enumerate() {
+                let artist = api::string_field(item, "artist");
+                let title = api::string_field(item, "title");
+                println!("top{}: {} - {}", i + 1, artist, title);
             }
+        }
+        Err(e) => {
+            let msg = api::sanitize_output(&format!("{e:#}"));
+            let (code, emsg) = parse_vk_error_fields(&msg);
+            println!("ok=false error_code={} error_msg={}", code, emsg);
         }
     }
 
