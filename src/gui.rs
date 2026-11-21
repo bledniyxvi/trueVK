@@ -62,6 +62,8 @@ const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20
 const LOGIN_SUBMIT_LABEL: &str = "\u{412}\u{43e}\u{439}\u{442}\u{438}";
 const LOGIN_LINK_HINT: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}\u{20}\u{441}\u{44e}\u{434}\u{430}";
 const LOGIN_MORE_LABEL: &str = "\u{414}\u{43e}\u{43f}\u{43e}\u{43b}\u{43d}\u{438}\u{442}\u{435}\u{43b}\u{44c}\u{43d}\u{43e}";
+const LOGIN_STEP_CIRCLE: f32 = 24.0;
+const LOGIN_STEP_GAP: f32 = 12.0;
 const LOGIN_HEADING: &str = "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}\u{2e}\u{20}\u{414}\u{430}\u{432}\u{430}\u{439}\u{20}\u{43f}\u{43e}\u{434}\u{43a}\u{43b}\u{44e}\u{447}\u{438}\u{43c}\u{20}\u{442}\u{432}\u{43e}\u{439}\u{20}\u{56}\u{4b}\u{2e}";
 const LOGIN_SUBHEADING: &str = "\u{42d}\u{442}\u{43e}\u{20}\u{434}\u{435}\u{43b}\u{430}\u{435}\u{442}\u{441}\u{44f}\u{20}\u{43e}\u{434}\u{438}\u{43d}\u{20}\u{440}\u{430}\u{437}\u{2e}";
 const LOGIN_STEP_ONE: &str = "\u{41d}\u{430}\u{436}\u{43c}\u{438}\u{20}\u{ab}\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}\u{bb}\u{20}\u{438}\u{20}\u{432}\u{43e}\u{439}\u{434}\u{438}\u{20}\u{432}\u{20}\u{430}\u{43a}\u{43a}\u{430}\u{443}\u{43d}\u{442}\u{2e}";
@@ -442,18 +444,20 @@ fn draw_step_circle(ui: &mut egui::Ui, rect: egui::Rect, number: usize) {
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, number.to_string(), theme::mono_font(12.0), theme::ACCENT);
 }
 
-fn login_step_row(ui: &mut egui::Ui, number: usize, text: &str) {
-    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::hover());
+fn login_step_row(ui: &mut egui::Ui, number: usize, text: &str, text_w: f32) {
+    let row_w = LOGIN_STEP_CIRCLE + LOGIN_STEP_GAP + text_w;
+    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(row_w, 56.0), egui::Sense::hover());
     let circle = egui::Rect::from_center_size(
-        egui::pos2(row_rect.min.x + 12.0, row_rect.min.y + 14.0),
-        egui::vec2(24.0, 24.0),
+        egui::pos2(row_rect.min.x + LOGIN_STEP_CIRCLE * 0.5, row_rect.min.y + 14.0),
+        egui::vec2(LOGIN_STEP_CIRCLE, LOGIN_STEP_CIRCLE),
     );
     draw_step_circle(ui, circle, number);
-    let text_rect = egui::Rect::from_min_max(
-        egui::pos2(row_rect.min.x + 36.0, row_rect.min.y),
-        row_rect.max,
+    let text_rect = egui::Rect::from_min_size(
+        egui::pos2(row_rect.min.x + LOGIN_STEP_CIRCLE + LOGIN_STEP_GAP, row_rect.min.y),
+        egui::vec2(text_w, row_rect.height()),
     );
     let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+    text_ui.set_width(text_w);
     text_ui.set_min_height(row_rect.height());
     text_ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT)).selectable(false).wrap());
 }
@@ -2149,120 +2153,121 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
 
     fn login_ui(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
-        let card_w = 480.0f32.min((available.width() - 32.0).max(1.0));
+        let card_w = 480.0f32.min(available.width() - 48.0).max(280.0);
         let inner_w = (card_w - 48.0).max(1.0);
+        let step_text_w = (inner_w - LOGIN_STEP_CIRCLE - LOGIN_STEP_GAP).max(1.0);
         let top_gap = ((available.height() - 660.0) * 0.5).max(0.0);
-        let left_gap = ((available.width() - card_w) * 0.5).max(0.0);
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(top_gap);
-            ui.horizontal(|ui| {
-                ui.add_space(left_gap);
+        egui::ScrollArea::vertical().hscroll(true).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.set_width(card_w);
+                ui.add_space(top_gap);
                 egui::Frame::new()
                     .fill(theme::SURFACE)
                     .stroke(egui::Stroke::new(1.0, theme::BORDER))
                     .corner_radius(egui::CornerRadius::same(12))
                     .inner_margin(egui::Margin::same(24))
                     .show(ui, |ui| {
-                        ui.set_max_width(inner_w);
-                        ui.set_min_width(inner_w);
+                        ui.vertical(|ui| {
+                            ui.set_width(inner_w);
 
-                        ui.horizontal(|ui| {
-                            let (mark_rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 20.0), egui::Sense::hover());
-                            draw_brand_mark(ui.painter(), mark_rect);
-                            ui.add_space(8.0);
-                            let (name_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w - 38.0, 20.0), egui::Sense::hover());
-                            ui.painter().text(
-                                egui::pos2(name_rect.min.x, name_rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                theme::APP_NAME,
-                                theme::semibold_font(18.0),
-                                theme::TEXT,
-                            );
-                        });
-                        ui.add_space(16.0);
+                            ui.horizontal(|ui| {
+                                let (mark_rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 20.0), egui::Sense::hover());
+                                draw_brand_mark(ui.painter(), mark_rect);
+                                ui.add_space(8.0);
+                                let (name_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w - 38.0, 20.0), egui::Sense::hover());
+                                ui.painter().text(
+                                    egui::pos2(name_rect.min.x, name_rect.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    theme::APP_NAME,
+                                    theme::semibold_font(18.0),
+                                    theme::TEXT,
+                                );
+                            });
+                            ui.add_space(16.0);
 
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(LOGIN_HEADING).font(theme::semibold_font(22.0)).color(theme::TEXT),
-                        ).selectable(false).wrap());
-                        ui.add_space(4.0);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(LOGIN_SUBHEADING).size(12.0).color(theme::MUTED),
-                        ).selectable(false).wrap());
-                        ui.add_space(16.0);
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(LOGIN_HEADING).font(theme::semibold_font(22.0)).color(theme::TEXT),
+                            ).selectable(false).wrap());
+                            ui.add_space(4.0);
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(LOGIN_SUBHEADING).size(12.0).color(theme::MUTED),
+                            ).selectable(false).wrap());
+                            ui.add_space(16.0);
 
-                        login_step_row(ui, 1, LOGIN_STEP_ONE);
-                        login_step_row(ui, 2, LOGIN_STEP_TWO);
-                        login_step_row(ui, 3, LOGIN_STEP_THREE);
-                        ui.add_space(10.0);
+                            login_step_row(ui, 1, LOGIN_STEP_ONE, step_text_w);
+                            login_step_row(ui, 2, LOGIN_STEP_TWO, step_text_w);
+                            login_step_row(ui, 3, LOGIN_STEP_THREE, step_text_w);
+                            ui.add_space(10.0);
 
-                        let button_gap = 10.0;
-                        let button_w = (inner_w - button_gap) * 0.5;
-                        ui.horizontal(|ui| {
-                            let (open_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
-                            if primary_pill_button(ui, open_rect, "login.open", LOGIN_OPEN_LABEL) {
-                                if std::process::Command::new("rundll32")
-                                    .args(["url.dll,FileProtocolHandler", api::AUTH_URL])
-                                    .spawn()
-                                    .is_err()
-                                {
-                                    self.status = "browser open error".to_string();
+                            let button_gap = 10.0;
+                            let button_w = 140.0f32.min(inner_w);
+                            ui.horizontal_wrapped(|ui| {
+                                let (open_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
+                                if primary_pill_button(ui, open_rect, "login.open", LOGIN_OPEN_LABEL) {
+                                    if std::process::Command::new("rundll32")
+                                        .args(["url.dll,FileProtocolHandler", api::AUTH_URL])
+                                        .spawn()
+                                        .is_err()
+                                    {
+                                        self.status = "browser open error".to_string();
+                                    }
                                 }
-                            }
-                            ui.add_space(button_gap);
-                            let (copy_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
-                            if ghost_pill_button(ui, copy_rect, "login.copy", LOGIN_COPY_LABEL) {
-                                ui.ctx().copy_text(api::AUTH_URL.to_string());
-                            }
-                        });
+                                ui.add_space(button_gap);
+                                let (copy_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 34.0), egui::Sense::hover());
+                                if ghost_pill_button(ui, copy_rect, "login.copy", LOGIN_COPY_LABEL) {
+                                    ui.ctx().copy_text(api::AUTH_URL.to_string());
+                                }
+                            });
 
-                        ui.add_space(12.0);
-                        let (link_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
-                        let link_resp = styled_login_field(
-                            ui,
-                            link_rect,
-                            ui.scope_id().with("login.link"),
-                            &mut self.login_input,
-                            LOGIN_LINK_HINT,
-                            true,
-                        );
-                        let submit_on_enter = link_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-
-                        ui.add_space(8.0);
-                        let (paste_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
-                        if ghost_pill_button(ui, paste_rect, "login.paste", LOGIN_PASTE_LABEL) {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                        }
-
-                        ui.add_space(8.0);
-                        let (submit_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
-                        let submit_clicked = primary_pill_button(ui, submit_rect, "login.submit", LOGIN_SUBMIT_LABEL);
-                        if submit_clicked || submit_on_enter {
-                            self.login_now();
-                        }
-
-                        ui.add_space(12.0);
-                        ui.collapsing(LOGIN_MORE_LABEL, |ui| {
-                            ui.add(egui::Label::new("User-Agent:").selectable(false));
-                            let (ua_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 30.0), egui::Sense::hover());
-                            styled_login_field(
+                            ui.add_space(12.0);
+                            let (link_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                            let link_resp = styled_login_field(
                                 ui,
-                                ua_rect,
-                                ui.scope_id().with("login.ua"),
-                                &mut self.ua_input,
-                                "",
-                                false,
+                                link_rect,
+                                ui.scope_id().with("login.link"),
+                                &mut self.login_input,
+                                LOGIN_LINK_HINT,
+                                true,
                             );
-                        });
+                            let submit_on_enter = link_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                        ui.add_space(14.0);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(LOGIN_PRIVACY).size(11.0).color(theme::MUTED),
-                        ).selectable(false).wrap());
-                        ui.add_space(8.0);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(LOGIN_DISCLAIMER).size(11.0).color(theme::MUTED),
-                        ).selectable(false).wrap());
+                            ui.add_space(8.0);
+                            let (paste_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                            if ghost_pill_button(ui, paste_rect, "login.paste", LOGIN_PASTE_LABEL) {
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                            }
+
+                            ui.add_space(8.0);
+                            let (submit_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 34.0), egui::Sense::hover());
+                            let submit_clicked = primary_pill_button(ui, submit_rect, "login.submit", LOGIN_SUBMIT_LABEL);
+                            if submit_clicked || submit_on_enter {
+                                self.login_now();
+                            }
+
+                            ui.add_space(12.0);
+                            ui.collapsing(LOGIN_MORE_LABEL, |ui| {
+                                ui.add(egui::Label::new("User-Agent:").selectable(false));
+                                let (ua_rect, _) = ui.allocate_exact_size(egui::vec2(inner_w, 30.0), egui::Sense::hover());
+                                styled_login_field(
+                                    ui,
+                                    ua_rect,
+                                    ui.scope_id().with("login.ua"),
+                                    &mut self.ua_input,
+                                    "",
+                                    false,
+                                );
+                            });
+
+                            ui.add_space(14.0);
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(LOGIN_PRIVACY).size(11.0).color(theme::MUTED),
+                            ).selectable(false).wrap());
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(LOGIN_DISCLAIMER).size(11.0).color(theme::MUTED),
+                            ).selectable(false).wrap());
+                        });
                     });
             });
         });
