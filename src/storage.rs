@@ -27,6 +27,8 @@ struct Settings {
     last_track: Option<SavedTrack>,
     #[serde(default)]
     repeat: Option<String>,
+    #[serde(default)]
+    shuffle: bool,
 }
 
 pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
@@ -83,6 +85,16 @@ pub fn load_repeat() -> String {
 pub fn save_repeat(repeat: &str) {
     let mut settings = load_settings();
     settings.repeat = Some(repeat.to_string());
+    let _ = save_settings(&settings);
+}
+
+pub fn load_shuffle() -> bool {
+    load_settings().shuffle
+}
+
+pub fn save_shuffle(shuffle: bool) {
+    let mut settings = load_settings();
+    settings.shuffle = shuffle;
     let _ = save_settings(&settings);
 }
 

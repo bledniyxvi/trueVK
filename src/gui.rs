@@ -4,11 +4,15 @@ use crate::storage;
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
 use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::{Menu, MenuEvent, MenuItem}};
+use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
 const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
+const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
+const SHUFFLE_ON: &str = "\u{0432}\u{043A}\u{043B}";
+const SHUFFLE_OFF: &str = "\u{0432}\u{044B}\u{043A}\u{043B}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -36,6 +40,53 @@ impl TrackId {
     fn from_track(t: &Track) -> Self {
         Self { owner_id: t.owner_id, id: t.id }
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ShuffleQueueKey {
+    source: QueueSource,
+    playlist: Option<(i64, i64)>,
+    search_query: Option<String>,
+    filter: String,
+}
+
+struct Xorshift64(u64);
+
+impl Xorshift64 {
+    fn from_seed(seed: u64) -> Self {
+        Self(if seed == 0 { 0x9E3779B97F4A7C15 } else { seed })
+    }
+
+    fn from_time() -> Self {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+        Self::from_seed(nanos)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+}
+
+fn pick_shuffle_id(
+    candidates: &[TrackId],
+    played: &HashSet<TrackId>,
+    rng: &mut Xorshift64,
+    excluded: Option<TrackId>,
+) -> Option<TrackId> {
+    let mut pool: Vec<TrackId> = Vec::new();
+    let mut seen: HashSet<TrackId> = HashSet::new();
+    for &tid in candidates {
+        if played.contains(&tid) || excluded == Some(tid) { continue; }
+        if seen.insert(tid) { pool.push(tid); }
+    }
+    if pool.is_empty() { return None; }
+    let idx = (rng.next_u64() % pool.len() as u64) as usize;
+    Some(pool[idx])
 }
 
 #[derive(Clone, Debug)]
@@ -291,6 +342,11 @@ struct GuiAppImpl {
     last_tray_tooltip: String,
     my_filter: String,
     repeat_mode: RepeatMode,
+    shuffle: bool,
+    shuffle_played: HashSet<TrackId>,
+    shuffle_history: Vec<TrackId>,
+    shuffle_rng: Xorshift64,
+    shuffle_queue_key_state: Option<ShuffleQueueKey>,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -329,6 +385,7 @@ impl GuiAppImpl {
             && ua.as_ref().map(|u| !u.is_empty()).unwrap_or(false);
         let ua_val = ua.unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
         let volume = storage::load_volume().clamp(0.0, 1.0);
+        let shuffle = storage::load_shuffle();
         let mut app = Self {
             cmd_tx,
             evt_rx,
@@ -425,6 +482,11 @@ impl GuiAppImpl {
             last_tray_tooltip: String::new(),
             my_filter: String::new(),
             repeat_mode: RepeatMode::from_str(&storage::load_repeat()),
+            shuffle,
+            shuffle_played: HashSet::new(),
+            shuffle_history: Vec::new(),
+            shuffle_rng: Xorshift64::from_time(),
+            shuffle_queue_key_state: None,
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -691,6 +753,8 @@ impl GuiAppImpl {
         self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false;
 
         self.queue.clear(); self.queue_source = QueueSource::MyMusic; self.queue_playlist = None; self.queue_search_query = None;
+        self.clear_shuffle_round();
+        self.shuffle_queue_key_state = None;
         self.add_states.clear();
         self.delete_states.clear();
 
@@ -762,6 +826,8 @@ fn set_queue_for_my_music(&mut self) {
         }
         self.selected_index = Some(index);
         let tid = TrackId::from_track(&track);
+        self.sync_shuffle_queue();
+        self.mark_shuffle_played(tid);
         self.pending_play_track_id = Some(tid);
         let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
     }
@@ -792,58 +858,151 @@ fn set_queue_for_my_music(&mut self) {
         self.queue.iter().find(|t| t.is_playable()).map(TrackId::from_track)
     }
 
-    fn play_next(&mut self) {
-        let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
-        if let Some(next) = self.find_next_playable_id(cur, 1) {
-            self.play_track_id(next);
-            return;
+    fn shuffle_queue_key(&self) -> ShuffleQueueKey {
+        ShuffleQueueKey {
+            source: self.queue_source,
+            playlist: self.queue_playlist,
+            search_query: self.queue_search_query.clone(),
+            filter: if self.queue_source == QueueSource::MyMusic { self.my_filter.clone() } else { String::new() },
         }
-        if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
-            self.rec_waiting_next = true;
-            self.request_recommendations_more();
-            return;
+    }
+
+    fn clear_shuffle_round(&mut self) {
+        self.shuffle_played.clear();
+        self.shuffle_history.clear();
+    }
+
+    fn sync_shuffle_queue(&mut self) {
+        let key = self.shuffle_queue_key();
+        if self.shuffle_queue_key_state.as_ref() != Some(&key) {
+            self.clear_shuffle_round();
+            self.shuffle_queue_key_state = Some(key);
         }
-        if self.repeat_mode == RepeatMode::All {
-            if let Some(first) = self.first_playable_in_queue() {
-                self.play_track_id(first);
-                return;
+    }
+
+    fn shuffle_candidates(&self) -> Vec<TrackId> {
+        self.queue.iter().filter(|t| t.is_playable()).map(TrackId::from_track).collect()
+    }
+
+    fn mark_shuffle_played(&mut self, tid: TrackId) {
+        if !self.shuffle { return; }
+        self.shuffle_played.insert(tid);
+        if self.shuffle_history.last() != Some(&tid) {
+            self.shuffle_history.push(tid);
+            if self.shuffle_history.len() > 100 { self.shuffle_history.remove(0); }
+        }
+    }
+
+    fn shuffle_next_id(&mut self, cur: TrackId) -> Option<TrackId> {
+        let candidates = self.shuffle_candidates();
+        pick_shuffle_id(&candidates, &self.shuffle_played, &mut self.shuffle_rng, Some(cur))
+    }
+
+    fn shuffle_repeat_id(&mut self, cur: TrackId) -> Option<TrackId> {
+        let candidates = self.shuffle_candidates();
+        if let Some(next) = pick_shuffle_id(&candidates, &self.shuffle_played, &mut self.shuffle_rng, Some(cur)) {
+            return Some(next);
+        }
+        if candidates.contains(&cur) { Some(cur) } else { None }
+    }
+
+    fn shuffle_prev_id(&self, cur: TrackId) -> Option<TrackId> {
+        if self.shuffle_history.is_empty() { return None; }
+        let Some(pos) = self.shuffle_history.iter().rposition(|&tid| tid == cur) else {
+            return self.shuffle_history.last().copied();
+        };
+        if pos == 0 { return None; }
+        let candidates: HashSet<TrackId> = self.shuffle_candidates().into_iter().collect();
+        for &tid in self.shuffle_history[..pos].iter().rev() {
+            if candidates.contains(&tid) { return Some(tid); }
+        }
+        None
+    }
+
+    fn start_shuffle_track(&mut self, tid: TrackId) {
+        self.mark_shuffle_played(tid);
+        self.play_track_id(tid);
+    }
+
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        storage::save_shuffle(self.shuffle);
+        self.clear_shuffle_round();
+        self.sync_shuffle_queue();
+        if self.shuffle {
+            if let Some(tid) = self.now_playing.as_ref().and_then(|np| np.track_id) {
+                self.mark_shuffle_played(tid);
             }
         }
-        self.now_playing = None;
+    }
+
+    fn play_next(&mut self) {
+        self.advance_next(false);
     }
 
     fn play_next_autoplay(&mut self) {
+        self.advance_next(true);
+    }
+
+    fn advance_next(&mut self, autoplay: bool) {
         let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
-        if self.repeat_mode == RepeatMode::One {
+        if autoplay && self.repeat_mode == RepeatMode::One {
             if self.queue.iter().any(|t| TrackId::from_track(t) == cur && t.is_playable()) {
                 self.play_track_id(cur);
-                return;
+            } else {
+                self.now_playing = None;
+                self.sync_tray_tooltip("vkmusic");
             }
-            self.now_playing = None;
-            self.sync_tray_tooltip("vkmusic");
             return;
         }
-        if let Some(next) = self.find_next_playable_id(cur, 1) {
+        self.sync_shuffle_queue();
+        if self.shuffle {
+            if let Some(next) = self.shuffle_next_id(cur) {
+                self.start_shuffle_track(next);
+                return;
+            }
+        } else if let Some(next) = self.find_next_playable_id(cur, 1) {
             self.play_track_id(next);
             return;
         }
-        if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
-            self.rec_waiting_next = true;
-            self.request_recommendations_more();
-            return;
-        }
-        if self.repeat_mode == RepeatMode::All {
-            if let Some(first) = self.first_playable_in_queue() {
-                self.play_track_id(first);
+        if self.shuffle {
+            if self.repeat_mode == RepeatMode::All {
+                self.shuffle_played.clear();
+                if let Some(next) = self.shuffle_repeat_id(cur) {
+                    self.start_shuffle_track(next);
+                    return;
+                }
+            } else if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
+                self.rec_waiting_next = true;
+                self.request_recommendations_more();
                 return;
+            }
+        } else {
+            if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
+                self.rec_waiting_next = true;
+                self.request_recommendations_more();
+                return;
+            }
+            if self.repeat_mode == RepeatMode::All {
+                if let Some(first) = self.first_playable_in_queue() {
+                    self.play_track_id(first);
+                    return;
+                }
             }
         }
         self.now_playing = None;
-        self.sync_tray_tooltip("vkmusic");
+        if autoplay { self.sync_tray_tooltip("vkmusic"); }
     }
 
     fn play_prev(&mut self) {
         let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
+        if self.shuffle {
+            self.sync_shuffle_queue();
+            if let Some(prev) = self.shuffle_prev_id(cur) {
+                self.play_track_id(prev);
+                return;
+            }
+        }
         if let Some(prev) = self.find_next_playable_id(cur, -1) {
             self.play_track_id(prev);
         }
@@ -1245,25 +1404,31 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         }
                     }
                 }
-                                UiEvent::RecommendationsLoaded { request_id, replace, items } => {
-                    let was_waiting_next = self.rec_waiting_next;
-                    let cur = self.now_playing.as_ref().and_then(|np| np.track_id);
-                    self.append_recommendations(request_id, replace, items);
-                    if was_waiting_next {
-                        self.rec_waiting_next = false;
-                        if self.queue_source == QueueSource::Recommendations {
-                            if let Some(cur_id) = cur {
-                                if let Some(next) = self.find_next_playable_id(cur_id, 1) {
-                                    self.play_track_id(next);
-                                } else if self.rec_no_more {
-                                    self.now_playing = None;
-                                }
-                            } else if self.rec_no_more {
-                                self.now_playing = None;
-                            }
-                        }
-                    }
-                }UiEvent::RecommendationsError { request_id, msg } => {
+                                 UiEvent::RecommendationsLoaded { request_id, replace, items } => {
+                     let was_waiting_next = self.rec_waiting_next;
+                     let cur = self.now_playing.as_ref().and_then(|np| np.track_id);
+                     self.append_recommendations(request_id, replace, items);
+                     if was_waiting_next {
+                         self.rec_waiting_next = false;
+                         if self.queue_source == QueueSource::Recommendations {
+                             self.sync_shuffle_queue();
+                             if let Some(cur_id) = cur {
+                                 let next = if self.shuffle {
+                                     self.shuffle_next_id(cur_id)
+                                 } else {
+                                     self.find_next_playable_id(cur_id, 1)
+                                 };
+                                 if let Some(next) = next {
+                                     if self.shuffle { self.start_shuffle_track(next); } else { self.play_track_id(next); }
+                                 } else if self.rec_no_more {
+                                     self.now_playing = None;
+                                 }
+                             } else if self.rec_no_more {
+                                 self.now_playing = None;
+                             }
+                         }
+                     }
+                 }UiEvent::RecommendationsError { request_id, msg } => {
                     if request_id != self.rec_request_id { continue; }
                     self.rec_loading = false;
                     self.rec_waiting_next = false;
@@ -1318,6 +1483,8 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.status.clear();
                     self.restored_track = Some(track.clone());
                     self.set_queue_for_my_music();
+                    self.sync_shuffle_queue();
+                    self.mark_shuffle_played(TrackId::from_track(&track));
                     self.pending_play_track_id = Some(TrackId::from_track(&track));
                     let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
                 }
@@ -1739,16 +1906,23 @@ impl eframe::App for GuiAppImpl {
             };
             ui.horizontal(|ui| {
                 let repeat_w = 110.0;
-                let label_w = (ui.available_width() - repeat_w - ui.spacing().item_spacing.x).max(40.0);
+                let shuffle_w = 130.0;
+                let spacing = ui.spacing().item_spacing.x;
+                let controls_w = repeat_w + shuffle_w + spacing;
+                let label_w = (ui.available_width() - controls_w - spacing).max(40.0);
                 let row_h = ui.text_style_height(&egui::TextStyle::Body);
                 ui.allocate_ui_with_layout(egui::vec2(label_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add(egui::Label::new(now_text).selectable(false).truncate());
                 });
-                ui.allocate_ui_with_layout(egui::vec2(repeat_w, row_h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(controls_w, row_h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let rep_label = format!("\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: {}", self.repeat_mode.label());
-                    if ui.small_button(rep_label).clicked() {
+                    if ui.add(egui::Button::new(rep_label).small().truncate()).clicked() {
                         self.repeat_mode = self.repeat_mode.next();
                         storage::save_repeat(self.repeat_mode.as_str());
+                    }
+                    let shuf_label = format!("{}: {}", SHUFFLE_LABEL, if self.shuffle { SHUFFLE_ON } else { SHUFFLE_OFF });
+                    if ui.add(egui::Button::new(shuf_label).small().truncate()).clicked() {
+                        self.toggle_shuffle();
                     }
                 });
             });
@@ -1852,6 +2026,7 @@ impl eframe::App for GuiAppImpl {
                     if self.my_filter != filter_before {
                         self.filter_autoload_stopped = false;
                         self.my_status.clear();
+                        self.sync_shuffle_queue();
                     }
                     let filter_active = !self.my_filter.trim().is_empty();
                     let filtered = self.my_music_filtered();
@@ -2001,5 +2176,53 @@ impl eframe::App for GuiAppImpl {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tid(id: i64) -> TrackId {
+        TrackId { owner_id: 1, id }
+    }
+
+    #[test]
+    fn never_picks_played_track() {
+        let candidates = [tid(1), tid(2), tid(3)];
+        let played: HashSet<TrackId> = [tid(1), tid(2)].into_iter().collect();
+        let mut rng = Xorshift64::from_seed(0x1234_5678_9ABC_DEF0);
+        for _ in 0..32 {
+            assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, None), Some(tid(3)));
+        }
+    }
+
+    #[test]
+    fn returns_none_when_all_played() {
+        let candidates = [tid(1), tid(2)];
+        let played: HashSet<TrackId> = candidates.iter().copied().collect();
+        let mut rng = Xorshift64::from_seed(0x1234_5678_9ABC_DEF0);
+        assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, None), None);
+    }
+
+    #[test]
+    fn skips_excluded_current_when_another_exists() {
+        let candidates = [tid(1), tid(2)];
+        let played = HashSet::new();
+        let mut rng = Xorshift64::from_seed(0x1234_5678_9ABC_DEF0);
+        for _ in 0..32 {
+            let picked = pick_shuffle_id(&candidates, &played, &mut rng, Some(tid(1)));
+            assert!(picked.is_some());
+            assert_ne!(picked, Some(tid(1)));
+        }
+    }
+
+    #[test]
+    fn works_with_single_track() {
+        let candidates = [tid(7)];
+        let played = HashSet::new();
+        let mut rng = Xorshift64::from_seed(0x1234_5678_9ABC_DEF0);
+        assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, None), Some(tid(7)));
+        assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, Some(tid(7))), None);
     }
 }
