@@ -2,7 +2,7 @@
 pub const API_HOST: &str = "https://api.vk.ru/method/";
 pub const REQUEST_TIMEOUT_SECS: u64 = 20;
 pub const PLAY_MAX_BYTES: usize = 40 * 1024 * 1024;
-pub const DEFAULT_ANDROID_UA: &str = "VKAndroidApp/8.131-18376 (Android 14; SDK 34; arm64-v8a; Google Pixel 8; en; 2960x1440)";
+pub const DEFAULT_ANDROID_UA: &str = "VKAndroidApp/8.154-99999 (Android 12; SDK 32; arm64-v8a; Pixel 6; ru; 2960x1440)";
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
