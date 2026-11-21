@@ -107,8 +107,8 @@ fn worker_loop(
                     s.seeking.store(true, Ordering::Relaxed);
                     let pos = match s.player.try_seek(target) {
                         Ok(()) => target,
-                        Err(e) => {
-                            eprintln!("try_seek failed: {e:?}");
+                        Err(_) => {
+                            eprintln!("try_seek failed");
                             let decoder = match make_decoder(Arc::clone(&s.bytes)) {
                                 Ok(d) => d,
                                 Err(_) => {

@@ -163,8 +163,10 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
 }
 
 pub fn map_reqwest_error(err: reqwest::Error) -> anyhow::Error {
+    let err = err.without_url();
     if let Some(status) = err.status() {
         anyhow!("request failed (status {})", status.as_u16())
+
     } else if err.is_timeout() {
         anyhow!("request failed (timeout)")
     } else if err.is_connect() {
@@ -184,10 +186,17 @@ pub fn sanitize_output(input: &str) -> String {
             out = out.replace(trimmed, "<redacted>");
         }
     }
+    if let Some(token) = crate::storage::saved_token_for_redaction() {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            out = out.replace(trimmed, "<redacted>");
+        }
+    }
     out
 }
 
 pub fn redact_urls(input: &str) -> String {
+
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len());
     let mut i = 0;

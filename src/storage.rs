@@ -38,6 +38,10 @@ pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
     }
 }
 
+pub fn saved_token_for_redaction() -> Option<String> {
+    read_secret(TOKEN_USER)
+}
+
 pub fn save_credentials(token: &str, ua: &str) {
     if token.trim().is_empty() || ua.trim().is_empty() {
         return;

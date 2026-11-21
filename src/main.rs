@@ -422,7 +422,7 @@ fn print_expires_remaining(item: &Value) {
 fn probe_one(client: &reqwest::blocking::Client, track_n: usize, source: &str, url: &str) {
     let resp = match client.get(url).header(reqwest::header::RANGE, "bytes=0-15").send() {
         Ok(r) => r,
-        Err(e) => { println!("track {track_n} | {source} | {}", api::sanitize_output(&short_reqwest_error(&e))); return; }
+        Err(e) => { println!("track {track_n} | {source} | {}", api::sanitize_output(&short_reqwest_error(e))); return; }
     };
     let status = resp.status().as_u16();
     let content_type = header_str(resp.headers(), "content-type");
@@ -477,7 +477,8 @@ fn format_guess(bytes: &[u8]) -> &'static str {
     "unknown"
 }
 
-fn short_reqwest_error(err: &reqwest::Error) -> String {
+fn short_reqwest_error(err: reqwest::Error) -> String {
+    let err = err.without_url();
     if let Some(status) = err.status() { format!("request failed (status {})", status.as_u16()) }
     else if err.is_timeout() { "request failed (timeout)".to_string() }
     else if err.is_connect() { "request failed (connect)".to_string() }
