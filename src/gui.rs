@@ -12,12 +12,30 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
 const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
-const SHUFFLE_ON: &str = "\u{0432}\u{043A}\u{043B}";
-const SHUFFLE_OFF: &str = "\u{0432}\u{044B}\u{043A}\u{043B}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
 const TRACK_ROW_HEIGHT: f32 = 44.0;
 const ADD_TRACK_TOOLTIP: &str = "\u{0414}\u{043E}\u{0431}\u{0430}\u{0432}\u{0438}\u{0442}\u{044C} \u{0432} \u{043C}\u{043E}\u{044E} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0443}";
 const REMOVE_TRACK_TOOLTIP: &str = "\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}";
+const NOTHING_PLAYING_TEXT: &str = "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}";
+const PREV_TOOLTIP: &str = "\u{041F}\u{0440}\u{0435}\u{0434}\u{044B}\u{0434}\u{0443}\u{0449}\u{0438}\u{0439}";
+const PLAY_TOOLTIP: &str = "\u{0418}\u{0433}\u{0440}\u{0430}\u{0442}\u{044C}";
+const PAUSE_TOOLTIP: &str = "\u{041F}\u{0430}\u{0443}\u{0437}\u{0430}";
+const NEXT_TOOLTIP: &str = "\u{0421}\u{043B}\u{0435}\u{0434}\u{0443}\u{044E}\u{0449}\u{0438}\u{0439}";
+const STOP_TOOLTIP: &str = "\u{0421}\u{0442}\u{043E}\u{043F}";
+const REPEAT_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}";
+const REPEAT_ALL_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: \u{0432}\u{0441}\u{0435}";
+const REPEAT_ONE_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: 1";
+const REPEAT_TOOLTIP: &str = "\u{0420}\u{0435}\u{0436}\u{0438}\u{043C} \u{043F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}\u{0430}";
+const SHUFFLE_TOOLTIP: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0438}\u{0442}\u{044C} \u{0432}\u{043E}\u{0441}\u{043F}\u{0440}\u{043E}\u{0438}\u{0437}\u{0432}\u{0435}\u{0434}\u{0435}\u{043D}\u{0438}\u{0435}";
+const MUTE_TOOLTIP: &str = "\u{0412}\u{044B}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
+const UNMUTE_TOOLTIP: &str = "\u{0412}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
+const PANEL_MARGIN_X: f32 = 12.0;
+const PANEL_BOTTOM_MARGIN: f32 = 10.0;
+const PANEL_PROGRESS_HIT_H: f32 = 14.0;
+const PANEL_ZONES_H: f32 = 92.0;
+const PANEL_CENTER_W: f32 = 240.0;
+const PANEL_RIGHT_W: f32 = 220.0;
+const PANEL_ZONE_GAP: f32 = 3.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -149,6 +167,133 @@ impl NowPlaying {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TransportIcon {
+    Prev,
+    Play,
+    Pause,
+    Next,
+    Stop,
+}
+
+fn paint_bar(painter: &egui::Painter, x0: f32, x1: f32, y: f32, fraction: f32, thickness: f32, handle: bool) {
+    if x1 <= x0 { return; }
+    let value = fraction.clamp(0.0, 1.0);
+    let fill_x = x0 + (x1 - x0) * value;
+    painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], egui::Stroke::new(thickness, theme::BORDER));
+    if value > 0.0 {
+        painter.line_segment([egui::pos2(x0, y), egui::pos2(fill_x, y)], egui::Stroke::new(thickness, theme::ACCENT));
+    }
+    if handle {
+        painter.circle_filled(egui::pos2(fill_x, y), 5.0, theme::ACCENT);
+    }
+}
+
+fn measure_label_width(ui: &egui::Ui, text: &str, font: egui::FontId) -> f32 {
+    ui.painter().layout_no_wrap(text.to_owned(), font, theme::TEXT).rect.width()
+}
+
+fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: TransportIcon, enabled: bool, tooltip: &str) -> bool {
+    let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
+    let hovered = resp.hovered() && enabled;
+    let painter = ui.painter();
+    let center = rect.center();
+    let is_play = matches!(icon, TransportIcon::Play);
+    if is_play {
+        let fill = if enabled { theme::ACCENT } else { theme::ACCENT_DIM };
+        painter.circle_filled(center, rect.width() * 0.5, fill);
+    } else if hovered {
+        painter.circle_filled(center, rect.width() * 0.5, theme::HOVER);
+    }
+    let color = if is_play && enabled { theme::BG } else if enabled { theme::TEXT } else { theme::MUTED };
+    match icon {
+        TransportIcon::Prev => {
+            let r = 6.0;
+            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x - r - 2.0, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(0), color);
+            painter.add(egui::Shape::convex_polygon(vec![
+                egui::pos2(center.x + r, center.y - r),
+                egui::pos2(center.x + r, center.y + r),
+                egui::pos2(center.x - r + 1.0, center.y),
+            ], color, egui::Stroke::NONE));
+        }
+        TransportIcon::Next => {
+            let r = 6.0;
+            painter.add(egui::Shape::convex_polygon(vec![
+                egui::pos2(center.x - r, center.y - r),
+                egui::pos2(center.x - r, center.y + r),
+                egui::pos2(center.x + r - 1.0, center.y),
+            ], color, egui::Stroke::NONE));
+            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x + r, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(0), color);
+        }
+        TransportIcon::Play => {
+            painter.add(egui::Shape::convex_polygon(vec![
+                egui::pos2(center.x - 5.0, center.y - 7.0),
+                egui::pos2(center.x - 5.0, center.y + 7.0),
+                egui::pos2(center.x + 7.0, center.y),
+            ], color, egui::Stroke::NONE));
+        }
+        TransportIcon::Pause => {
+            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x - 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
+            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x + 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
+        }
+        TransportIcon::Stop => {
+            painter.rect_filled(egui::Rect::from_center_size(center, egui::vec2(14.0, 14.0)), egui::CornerRadius::same(3), color);
+        }
+    }
+    let resp = resp.on_hover_text(tooltip);
+    if hovered {
+        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked() && enabled
+}
+
+fn pill_toggle(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str, active: bool, tooltip: &str) -> bool {
+    let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
+    let fill = if active { theme::ACCENT_DIM } else { theme::SURFACE };
+    let stroke = if active { theme::ACCENT } else { theme::BORDER };
+    let text_color = if active { theme::ACCENT } else { theme::MUTED };
+    let radius = egui::CornerRadius::same(11);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, fill);
+    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Middle);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold_font(12.0), text_color);
+    let resp = resp.on_hover_text(tooltip);
+    if resp.hovered() {
+        resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+fn draw_speaker(painter: &egui::Painter, center: egui::Pos2, muted: bool) {
+    let color = if muted { theme::MUTED } else { theme::TEXT };
+    painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x - 5.0, center.y), egui::vec2(5.0, 8.0)), egui::CornerRadius::same(0), color);
+    painter.add(egui::Shape::convex_polygon(vec![
+        egui::pos2(center.x - 2.0, center.y - 4.0),
+        egui::pos2(center.x + 3.0, center.y - 8.0),
+        egui::pos2(center.x + 3.0, center.y + 8.0),
+        egui::pos2(center.x - 2.0, center.y + 4.0),
+    ], color, egui::Stroke::NONE));
+    if muted {
+        painter.line_segment([egui::pos2(center.x + 5.0, center.y - 4.0), egui::pos2(center.x + 11.0, center.y + 4.0)], egui::Stroke::new(1.3, color));
+        painter.line_segment([egui::pos2(center.x + 11.0, center.y - 4.0), egui::pos2(center.x + 5.0, center.y + 4.0)], egui::Stroke::new(1.3, color));
+    } else {
+        painter.line(vec![
+            egui::pos2(center.x + 4.0, center.y - 5.0),
+            egui::pos2(center.x + 7.0, center.y - 3.0),
+            egui::pos2(center.x + 8.0, center.y),
+            egui::pos2(center.x + 7.0, center.y + 3.0),
+            egui::pos2(center.x + 4.0, center.y + 5.0),
+        ], (1.3, color));
+        painter.line(vec![
+            egui::pos2(center.x + 4.0, center.y - 9.0),
+            egui::pos2(center.x + 10.0, center.y - 5.0),
+            egui::pos2(center.x + 12.0, center.y),
+            egui::pos2(center.x + 10.0, center.y + 5.0),
+            egui::pos2(center.x + 4.0, center.y + 9.0),
+        ], (1.3, color));
+    }
+}
+
 pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instance_listener: Option<std::net::TcpListener>) -> eframe::Result<()> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<PlayerCmd>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<PlayerEvent>();
@@ -172,7 +317,7 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instanc
             let client_ua = ua.clone().unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
             let client = api::build_client(&client_ua).unwrap_or_else(|_| reqwest::blocking::Client::new());
             crate::player::spawn_player_worker(client, cmd_rx, evt_tx, ctx.clone());
-            let mut app = GuiAppImpl::new(
+            let app = GuiAppImpl::new(
                 cmd_tx, evt_rx, ui_evt_tx.clone(), ui_evt_rx, token, ua, from_saved, ctx.clone(),
             );
             if let Some(listener) = single_instance_listener {
@@ -237,9 +382,6 @@ impl RepeatMode {
     }
     fn next(self) -> Self {
         match self { Self::Off => Self::All, Self::All => Self::One, Self::One => Self::Off }
-    }
-    fn label(self) -> &'static str {
-        match self { Self::Off => "\u{0432}\u{044B}\u{043A}\u{043B}", Self::All => "\u{0432}\u{0441}\u{0435}", Self::One => "1" }
     }
 }
 
@@ -319,6 +461,7 @@ struct GuiAppImpl {
     status: String,
     now_playing: Option<NowPlaying>,
     volume: f32,
+    volume_before_mute: Option<f32>,
     seek_drag: Option<u64>,
     pending_play_track_id: Option<TrackId>,
     selected_index: Option<usize>,
@@ -452,6 +595,7 @@ impl GuiAppImpl {
             status: if logged_in { String::new() } else { "Login required".to_string() },
             now_playing: None,
             volume,
+            volume_before_mute: None,
             seek_drag: None,
             pending_play_track_id: None,
             selected_index: None,
@@ -1745,38 +1889,52 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         } else if row_hovered {
             ui.painter().rect_filled(rect, corner, theme::HOVER);
         }
+
         let inner = rect.shrink2(egui::vec2(10.0, 0.0));
-        let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        row_ui.set_min_height(row_h);
-        row_ui.allocate_ui_with_layout(egui::vec2(44.0, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if is_playing {
-                let center = ui.max_rect().center();
-                let tri = egui::Rect::from_center_size(center, egui::vec2(10.0, 12.0));
-                ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::ACCENT));
-            } else {
-                ui.add(egui::Label::new(egui::RichText::new(idx_text).font(theme::mono_font(13.0)).color(theme::MUTED)).selectable(false));
-            }
-        });
-        row_ui.add_space(4.0);
+        let left_w = 44.0;
+        let duration_w = 52.0;
         let action_w = if delete_confirm { 170.0 } else { 52.0 };
-        let action_clicked = row_ui.allocate_ui_with_layout(egui::vec2(action_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            self.render_track_action(ui, track, source, &tid, &resp, pointer_over_row || delete_confirm)
-        }).inner;
-        row_ui.add_space(4.0);
+        let action_gap = 8.0;
+        let text_gap = 6.0;
+        let duration_rect = egui::Rect::from_min_size(
+            egui::pos2(inner.max.x - duration_w, rect.min.y),
+            egui::vec2(duration_w, row_h),
+        );
+        let action_right = duration_rect.min.x - action_gap;
+        let action_rect = egui::Rect::from_min_size(
+            egui::pos2(action_right - action_w, rect.min.y),
+            egui::vec2(action_w, row_h),
+        );
+        let text_min_x = inner.min.x + left_w + text_gap;
+        let text_w = (action_rect.min.x - text_gap - text_min_x).max(40.0);
+        let left_rect = egui::Rect::from_min_size(inner.min, egui::vec2(left_w, row_h));
+        let text_rect = egui::Rect::from_min_size(egui::pos2(text_min_x, rect.min.y), egui::vec2(text_w, row_h));
+
+        let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        left_ui.set_min_height(row_h);
+        if is_playing {
+            let tri = egui::Rect::from_center_size(left_rect.center(), egui::vec2(10.0, 12.0));
+            ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::ACCENT));
+        } else {
+            left_ui.add(egui::Label::new(egui::RichText::new(idx_text).font(theme::mono_font(13.0)).color(theme::MUTED)).selectable(false));
+        }
+
         let dim = theme::MUTED.gamma_multiply(0.55);
         let title_color = if playable { theme::TEXT } else { dim };
         let artist_color = if playable { theme::MUTED } else { dim };
-        let right_w = 52.0;
-        let spacing_x = row_ui.spacing().item_spacing.x;
-        let middle_w = (row_ui.available_width() - right_w - spacing_x).max(40.0);
-        row_ui.allocate_ui_with_layout(egui::vec2(middle_w, row_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
-            ui.add(egui::Label::new(egui::RichText::new(title_text).font(theme::semibold_font(14.0)).color(title_color)).selectable(false).truncate());
-            ui.add(egui::Label::new(egui::RichText::new(artist_text).size(12.0).color(artist_color)).selectable(false).truncate());
-        });
-        row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let time_color = if playable { theme::MUTED } else { dim };
-            ui.add(egui::Label::new(egui::RichText::new(dur).font(theme::mono_font(12.0)).color(time_color)).selectable(false));
-        });
+        let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+        text_ui.set_min_height(row_h);
+        text_ui.add(egui::Label::new(egui::RichText::new(title_text).font(theme::semibold_font(14.0)).color(title_color)).selectable(false).truncate());
+        text_ui.add(egui::Label::new(egui::RichText::new(artist_text).size(12.0).color(artist_color)).selectable(false).truncate());
+
+        let mut duration_ui = ui.new_child(egui::UiBuilder::new().max_rect(duration_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        duration_ui.set_min_height(row_h);
+        let time_color = if playable { theme::MUTED } else { dim };
+        duration_ui.add(egui::Label::new(egui::RichText::new(dur).font(theme::mono_font(12.0)).color(time_color)).selectable(false));
+
+        let mut action_ui = ui.new_child(egui::UiBuilder::new().max_rect(action_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        action_ui.set_min_height(row_h);
+        let action_clicked = self.render_track_action(&mut action_ui, track, source, &tid, &resp, pointer_over_row || delete_confirm);
         if !action_clicked && resp.clicked() {
             self.selected_index = Some(i);
             if playable {
@@ -1987,101 +2145,289 @@ impl eframe::App for GuiAppImpl {
             }
         }
 
-        egui::Panel::bottom("bottom").show(ui, |ui| {
-                        let now_text = if let Some(np) = &self.now_playing {
-                format!("{} - {}", np.artist, np.title)
-            } else if let Some(t) = &self.restored_track {
-                format!("{} - {} (\u{0433}\u{043E}\u{0442}\u{043E}\u{0432})", t.artist, t.title)
-            } else {
-                "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}".to_string()
-            };
-            self.ensure_cjk_font(ui.ctx(), &now_text);
-            ui.horizontal(|ui| {
-                let repeat_w = 110.0;
-                let shuffle_w = 130.0;
-                let spacing = ui.spacing().item_spacing.x;
-                let controls_w = repeat_w + shuffle_w + spacing;
-                let label_w = (ui.available_width() - controls_w - spacing).max(40.0);
-                let row_h = ui.text_style_height(&egui::TextStyle::Body);
-                ui.allocate_ui_with_layout(egui::vec2(label_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(now_text).selectable(false).truncate());
-                });
-                ui.allocate_ui_with_layout(egui::vec2(controls_w, row_h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let rep_label = format!("\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: {}", self.repeat_mode.label());
-                    if ui.add(egui::Button::new(rep_label).small().truncate()).clicked() {
-                        self.repeat_mode = self.repeat_mode.next();
-                        storage::save_repeat(self.repeat_mode.as_str());
-                    }
-                    let shuf_label = format!("{}: {}", SHUFFLE_LABEL, if self.shuffle { SHUFFLE_ON } else { SHUFFLE_OFF });
-                    if ui.add(egui::Button::new(shuf_label).small().truncate()).clicked() {
-                        self.toggle_shuffle();
-                    }
-                });
+        let panel_frame = egui::Frame::new()
+            .fill(theme::PANEL)
+            .stroke(egui::Stroke::NONE)
+            .inner_margin(egui::Margin {
+                left: PANEL_MARGIN_X as i8,
+                right: PANEL_MARGIN_X as i8,
+                top: 0,
+                bottom: PANEL_BOTTOM_MARGIN as i8,
             });
-            ui.horizontal(|ui| {
+        egui::Panel::bottom("bottom")
+            .frame(panel_frame)
+            .show_separator_line(false)
+            .min_size(132.0)
+            .max_size(132.0)
+            .default_size(132.0)
+            .show(ui, |ui| {
+                let content = ui.available_rect_before_wrap();
+                let top_y = content.min.y;
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(content.min.x - PANEL_MARGIN_X, top_y),
+                        egui::pos2(content.max.x + PANEL_MARGIN_X, top_y),
+                    ],
+                    egui::Stroke::new(1.0, theme::BORDER),
+                );
+
+                let has_duration = self.now_playing.as_ref()
+                    .and_then(|np| np.duration_secs)
+                    .filter(|&d| d > 0)
+                    .is_some();
                 let pos = self.now_playing.as_ref().map(|np| np.position_secs()).unwrap_or(0);
                 let dur = self.now_playing.as_ref().and_then(|np| np.duration_secs).unwrap_or(pos.max(1));
                 let shown_pos = self.seek_drag.unwrap_or(pos).min(dur.max(1));
-                ui.add(egui::Label::new(api::format_mm_ss(shown_pos)).selectable(false));
-                let mut seek_pos = shown_pos;
-                let dur_w = 44.0;
-                let slider_w = (ui.available_width() - dur_w - ui.spacing().item_spacing.x).max(40.0);
-                let old_slider_w = ui.spacing().slider_width;
-                ui.spacing_mut().slider_width = slider_w;
-                let seek_resp = ui.add_enabled(
-                    self.now_playing.is_some(),
-                    egui::Slider::new(&mut seek_pos, 0..=dur.max(1))
-                        .show_value(false)
-                        .clamping(egui::SliderClamping::Always),
+                let fraction = if has_duration { shown_pos as f32 / dur.max(1) as f32 } else { 0.0 };
+                let progress_rect = egui::Rect::from_min_size(
+                    egui::pos2(content.min.x, top_y),
+                    egui::vec2(content.width(), PANEL_PROGRESS_HIT_H),
                 );
-                ui.spacing_mut().slider_width = old_slider_w;
-                if seek_resp.changed() { self.seek_drag = Some(seek_pos); }
-                if seek_resp.drag_stopped() {
-                    let target = self.seek_drag.unwrap_or(seek_pos);
+                let seek_resp = ui.interact(progress_rect, ui.make_persistent_id("bottom.seek"), egui::Sense::click_and_drag());
+                let seek_active = has_duration && (seek_resp.hovered() || seek_resp.dragged());
+                paint_bar(
+                    ui.painter(),
+                    progress_rect.min.x,
+                    progress_rect.max.x,
+                    top_y + 6.0,
+                    fraction,
+                    if seek_active { 5.0 } else { 3.0 },
+                    seek_active,
+                );
+                if seek_active {
+                    seek_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
+                if has_duration && (seek_resp.clicked() || seek_resp.dragged()) {
+                    if let Some(pointer) = seek_resp.interact_pointer_pos() {
+                        let t = ((pointer.x - progress_rect.min.x) / progress_rect.width()).clamp(0.0, 1.0);
+                        self.seek_drag = Some((t * dur.max(1) as f32) as u64);
+                    }
+                }
+                if has_duration && seek_resp.drag_stopped() {
+                    let target = self.seek_drag.unwrap_or(pos).min(dur);
                     self.seek_drag = None;
                     let _ = self.cmd_tx.send(PlayerCmd::Seek(target));
                 }
-                ui.add(egui::Label::new(api::format_mm_ss(dur)).selectable(false));
-            });
 
-            ui.horizontal(|ui| {
-                if ui.button("Prev").clicked() { self.play_prev(); }
-                let pause_label = if self.now_playing.as_ref().map(|n| n.paused).unwrap_or(false) { "Resume" } else { "Pause" };
-                if ui.button(pause_label).clicked() {
+                let zones_top = top_y + PANEL_PROGRESS_HIT_H + 2.0;
+                let max_left_w = content.width() - PANEL_CENTER_W - PANEL_RIGHT_W - 2.0 * PANEL_ZONE_GAP;
+                let left_w = ((content.width() * 0.30).max(150.0)).min(max_left_w).max(150.0);
+                let zones_rect = egui::Rect::from_min_size(
+                    egui::pos2(content.min.x, zones_top),
+                    egui::vec2(content.width(), PANEL_ZONES_H),
+                );
+                let left_rect = egui::Rect::from_min_size(
+                    egui::pos2(zones_rect.min.x, zones_top),
+                    egui::vec2(left_w, PANEL_ZONES_H),
+                );
+                let right_rect = egui::Rect::from_min_size(
+                    egui::pos2(zones_rect.max.x - PANEL_RIGHT_W, zones_top),
+                    egui::vec2(PANEL_RIGHT_W, PANEL_ZONES_H),
+                );
+                let between = right_rect.min.x - left_rect.max.x;
+                let center_x = left_rect.max.x + ((between - PANEL_CENTER_W) * 0.5).max(PANEL_ZONE_GAP);
+                let center_rect = egui::Rect::from_min_size(
+                    egui::pos2(center_x, zones_top),
+                    egui::vec2(PANEL_CENTER_W, PANEL_ZONES_H),
+                );
+
+                let (title, artist, active) = if let Some(np) = &self.now_playing {
+                    (np.title.clone(), np.artist.clone(), true)
+                } else if let Some(t) = &self.restored_track {
+                    (
+                        format!("{} - {} (\u{0433}\u{043E}\u{0442}\u{043E}\u{0432})", t.artist, t.title),
+                        String::new(),
+                        false,
+                    )
+                } else {
+                    (NOTHING_PLAYING_TEXT.to_string(), String::new(), false)
+                };
+                self.ensure_cjk_font(ui.ctx(), &title);
+                self.ensure_cjk_font(ui.ctx(), &artist);
+                let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+                left_ui.set_min_height(PANEL_ZONES_H);
+                left_ui.add_space(1.0);
+                left_ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(title)
+                            .font(theme::semibold_font(14.0))
+                            .color(if active { theme::TEXT } else { theme::MUTED }),
+                    )
+                    .selectable(false)
+                    .truncate(),
+                );
+                left_ui.add(
+                    egui::Label::new(egui::RichText::new(artist).size(12.0).color(theme::MUTED))
+                        .selectable(false)
+                        .truncate(),
+                );
+
+                let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
+                let play_icon = if paused || self.now_playing.is_none() { TransportIcon::Play } else { TransportIcon::Pause };
+                let play_tooltip = if matches!(play_icon, TransportIcon::Play) { PLAY_TOOLTIP } else { PAUSE_TOOLTIP };
+                let play_enabled = self.now_playing.is_some() || self.restored_track.is_some();
+                let side_enabled = self.now_playing.is_some();
+                let controls_cy = zones_top + 22.0;
+                let controls_start = center_rect.center().x - 75.0;
+                let prev_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 14.0, controls_cy), egui::vec2(28.0, 28.0));
+                let play_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 58.0, controls_cy), egui::vec2(40.0, 40.0));
+                let next_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 102.0, controls_cy), egui::vec2(28.0, 28.0));
+                let stop_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 138.0, controls_cy), egui::vec2(24.0, 24.0));
+                if transport_button(ui, prev_rect, "bottom.prev", TransportIcon::Prev, side_enabled, PREV_TOOLTIP) {
+                    self.play_prev();
+                }
+                if transport_button(ui, play_rect, "bottom.play", play_icon, play_enabled, play_tooltip) {
                     if self.now_playing.is_some() {
                         let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
                     } else if self.restored_track.is_some() {
                         self.resolve_restored_track();
                     }
                 }
-                if ui.button("Next").clicked() { self.play_next(); }
-                if ui.button("Stop").clicked() { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
-                    ui.add(egui::Label::new(format!("{pct}%")).selectable(false));
-                    ui.add(egui::Label::new("\u{0413}\u{0440}\u{043E}\u{043C}\u{043A}.").selectable(false));
-                    let slider_w = (ui.available_width() - 2.0).max(40.0);
-                    let old_slider_w = ui.spacing().slider_width;
-                    ui.spacing_mut().slider_width = slider_w;
-                    let vol_resp = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
-                    ui.spacing_mut().slider_width = old_slider_w;
-                    if vol_resp.changed() || vol_resp.drag_stopped() {
-                        self.volume = self.volume.clamp(0.0, 1.0);
+                if transport_button(ui, next_rect, "bottom.next", TransportIcon::Next, side_enabled, NEXT_TOOLTIP) {
+                    self.play_next();
+                }
+                if transport_button(ui, stop_rect, "bottom.stop", TransportIcon::Stop, side_enabled, STOP_TOOLTIP) {
+                    let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                }
+
+                let time_rect = egui::Rect::from_min_size(
+                    egui::pos2(center_rect.min.x, zones_top + 50.0),
+                    egui::vec2(PANEL_CENTER_W, 20.0),
+                );
+                let dur_text = if has_duration { api::format_mm_ss(dur) } else { "--:--".to_string() };
+                ui.painter().text(
+                    time_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{} / {}", api::format_mm_ss(shown_pos), dur_text),
+                    theme::mono_font(12.0),
+                    theme::MUTED,
+                );
+
+                let speaker_rect = egui::Rect::from_center_size(
+                    egui::pos2(right_rect.min.x + 14.0, controls_cy),
+                    egui::vec2(28.0, 28.0),
+                );
+                let muted = self.volume <= 0.0;
+                draw_speaker(ui.painter(), speaker_rect.center(), muted);
+                let speaker_resp = ui.interact(speaker_rect, ui.make_persistent_id("bottom.mute"), egui::Sense::click())
+                    .on_hover_text(if muted { UNMUTE_TOOLTIP } else { MUTE_TOOLTIP });
+                if speaker_resp.hovered() {
+                    speaker_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
+                if speaker_resp.clicked() {
+                    self.volume = if muted {
+                        self.volume_before_mute.take().unwrap_or(0.6)
+                    } else {
+                        self.volume_before_mute = Some(self.volume);
+                        0.0
+                    }
+                    .clamp(0.0, 1.0);
+                    let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
+                    storage::save_volume(self.volume);
+                }
+
+                let vol_bar_rect = egui::Rect::from_min_size(
+                    egui::pos2(right_rect.min.x + 34.0, zones_top + 18.0),
+                    egui::vec2(130.0, 8.0),
+                );
+                let vol_resp = ui.interact(vol_bar_rect, ui.make_persistent_id("bottom.volume"), egui::Sense::click_and_drag());
+                paint_bar(
+                    ui.painter(),
+                    vol_bar_rect.min.x,
+                    vol_bar_rect.max.x,
+                    zones_top + 22.0,
+                    self.volume,
+                    3.0,
+                    vol_resp.hovered(),
+                );
+                if vol_resp.hovered() {
+                    vol_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
+                if vol_resp.clicked() || vol_resp.dragged() {
+                    if let Some(pointer) = vol_resp.interact_pointer_pos() {
+                        let t = ((pointer.x - vol_bar_rect.min.x) / vol_bar_rect.width()).clamp(0.0, 1.0);
+                        self.volume = t.clamp(0.0, 1.0);
+                        if self.volume > 0.0 {
+                            self.volume_before_mute = None;
+                        }
                         let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
                         storage::save_volume(self.volume);
                     }
-                });
-            });
+                }
+                let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
+                let pct_rect = egui::Rect::from_min_size(
+                    egui::pos2(right_rect.min.x + 170.0, zones_top + 10.0),
+                    egui::vec2(46.0, 24.0),
+                );
+                ui.painter().text(
+                    pct_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{pct}%"),
+                    theme::mono_font(12.0),
+                    theme::MUTED,
+                );
 
-            if !self.hotkey_status.is_empty() {
-                ui.add(egui::Label::new(&self.hotkey_status).selectable(false));
-            }
-            if !self.status.is_empty() {
-                let status = self.status.clone();
-                self.ensure_cjk_font(ui.ctx(), &status);
-                ui.add(egui::Label::new(&self.status).selectable(false));
-            }
-        });
+                let pill_y = zones_top + 54.0;
+                let pill_h = 22.0;
+                let repeat_w = measure_label_width(ui, REPEAT_ALL_LABEL, theme::semibold_font(12.0)) + 20.0;
+                let shuffle_w = measure_label_width(ui, SHUFFLE_LABEL, theme::semibold_font(12.0)) + 20.0;
+                let pill_gap = 6.0;
+                let pills_w = repeat_w + shuffle_w + pill_gap;
+                let pills_start = right_rect.center().x - pills_w * 0.5;
+                let repeat_rect = egui::Rect::from_min_size(
+                    egui::pos2(pills_start, pill_y),
+                    egui::vec2(repeat_w, pill_h),
+                );
+                let shuffle_rect = egui::Rect::from_min_size(
+                    egui::pos2(pills_start + repeat_w + pill_gap, pill_y),
+                    egui::vec2(shuffle_w, pill_h),
+                );
+                let repeat_label = match self.repeat_mode {
+                    RepeatMode::Off => REPEAT_LABEL,
+                    RepeatMode::All => REPEAT_ALL_LABEL,
+                    RepeatMode::One => REPEAT_ONE_LABEL,
+                };
+                if pill_toggle(
+                    ui,
+                    repeat_rect,
+                    "bottom.repeat",
+                    repeat_label,
+                    self.repeat_mode != RepeatMode::Off,
+                    REPEAT_TOOLTIP,
+                ) {
+                    self.repeat_mode = self.repeat_mode.next();
+                    storage::save_repeat(self.repeat_mode.as_str());
+                }
+                if pill_toggle(
+                    ui,
+                    shuffle_rect,
+                    "bottom.shuffle",
+                    SHUFFLE_LABEL,
+                    self.shuffle,
+                    SHUFFLE_TOOLTIP,
+                ) {
+                    self.toggle_shuffle();
+                }
+
+                let mut status_parts: Vec<String> = Vec::new();
+                if !self.hotkey_status.is_empty() {
+                    status_parts.push(self.hotkey_status.clone());
+                }
+                if !self.status.is_empty() {
+                    let status = self.status.clone();
+                    self.ensure_cjk_font(ui.ctx(), &status);
+                    status_parts.push(status);
+                }
+                let status = status_parts.join(" | ");
+                if !status.is_empty() {
+                    let status_rect = egui::Rect::from_min_size(
+                        egui::pos2(content.min.x, content.max.y - 12.0),
+                        egui::vec2(content.width(), 12.0),
+                    );
+                    let mut status_ui = ui.new_child(egui::UiBuilder::new().max_rect(status_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                    status_ui.add(egui::Label::new(egui::RichText::new(status).size(11.0).color(theme::MUTED)).selectable(false).truncate());
+                }
+            });
 
         egui::CentralPanel::default().show(ui, |ui| {
             if !self.logged_in {
