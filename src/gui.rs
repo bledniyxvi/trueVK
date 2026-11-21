@@ -2,6 +2,7 @@ use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
 use crate::player::{PlayerCmd, PlayerEvent};
 use crate::storage;
 use eframe::egui;
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -132,6 +133,14 @@ fn resolve_startup_credentials(
     (None, None, false)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum MediaHotkey {
+    PlayPause,
+    Stop,
+    Next,
+    Prev,
+}
+
 enum UiEvent {
     TracksLoaded { offset: usize, count: Option<u64>, items: Vec<Track> },
     PlaylistsLoaded { offset: usize, count: Option<u64>, items: Vec<PlaylistView> },
@@ -143,9 +152,11 @@ enum UiEvent {
     AddError { track_id: TrackId, msg: String },
     DeleteDone { track_id: TrackId },
     DeleteError { track_id: TrackId, msg: String },
+    MediaKey(MediaHotkey),
+    RestoredTrackResolved { track: Track },
+    RestoredTrackUnavailable(String),
     LoadError(String),
 }
-
 struct GuiAppImpl {
     cmd_tx: Sender<PlayerCmd>,
     evt_rx: Receiver<PlayerEvent>,
@@ -216,6 +227,10 @@ struct GuiAppImpl {
     egui_ctx: egui::Context,
     using_saved_credentials: bool,
     credentials_saved: bool,
+    _hotkey_manager: Option<GlobalHotKeyManager>,
+    hotkey_status: String,
+    restored_track: Option<Track>,
+    restored_track_pending: bool,
 }
 
 impl GuiAppImpl {
@@ -300,11 +315,25 @@ impl GuiAppImpl {
             fps_frames: 0,
             fps_last: Instant::now(),
             last_frame: Instant::now(),
-            egui_ctx,
+            egui_ctx: egui_ctx.clone(),
             using_saved_credentials,
             credentials_saved: false,
+            _hotkey_manager: None,
+            hotkey_status: String::new(),
+            restored_track: storage::load_last_track().map(|t| Track {
+                artist: t.artist,
+                title: t.title,
+                duration_secs: t.duration,
+                url: None,
+                owner_id: t.owner_id,
+                id: t.audio_id,
+                access_key: t.access_key,
+                audio_streams: None,
+            }),
+            restored_track_pending: false,
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
+        app.register_media_hotkeys();
         if app.logged_in {
             app.request_tracks_load();
         }
@@ -571,6 +600,8 @@ impl GuiAppImpl {
         self.delete_states.clear();
 
         self.now_playing = None;
+        self.restored_track = None;
+        self.restored_track_pending = false;
         self.pending_play_track_id = None;
         self.selected_index = None;
         self.seek_drag = None;
@@ -711,6 +742,109 @@ fn set_queue_for_my_music(&mut self) {
         }
     }
 
+    fn register_media_hotkeys(&mut self) {
+        let manager = match GlobalHotKeyManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                self.hotkey_status = format!("media keys unavailable: {}", api::sanitize_output(&format!("{e:#}")));
+                return;
+            }
+        };
+        let hotkeys = [
+            (MediaHotkey::PlayPause, HotKey::new(None, Code::MediaPlayPause)),
+            (MediaHotkey::Stop, HotKey::new(None, Code::MediaStop)),
+            (MediaHotkey::Next, HotKey::new(None, Code::MediaTrackNext)),
+            (MediaHotkey::Prev, HotKey::new(None, Code::MediaTrackPrevious)),
+        ];
+        let mut failed: Vec<&str> = Vec::new();
+        let mut map: std::collections::HashMap<u32, MediaHotkey> = std::collections::HashMap::new();
+        for (kind, hk) in hotkeys {
+            let id = hk.id();
+            match manager.register(hk) {
+                Ok(()) => { map.insert(id, kind); }
+                Err(_) => {
+                    failed.push(match kind {
+                        MediaHotkey::PlayPause => "PlayPause",
+                        MediaHotkey::Stop => "Stop",
+                        MediaHotkey::Next => "Next",
+                        MediaHotkey::Prev => "Prev",
+                    });
+                }
+            }
+        }
+        if !failed.is_empty() {
+            self.hotkey_status = format!("media keys busy: {}", failed.join(", "));
+        }
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let map = std::sync::Arc::new(map);
+        let _ = GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+            if event.state != HotKeyState::Pressed { return; }
+            if let Some(kind) = map.get(&event.id).copied() {
+                let _ = tx.send(UiEvent::MediaKey(kind));
+                ctx.request_repaint();
+            }
+        }));
+        self._hotkey_manager = Some(manager);
+    }
+
+    fn save_last_played_track(&self, track: &Track) {
+        let st = storage::SavedTrack {
+            owner_id: track.owner_id,
+            audio_id: track.id,
+            access_key: track.access_key.clone(),
+            artist: track.artist.clone(),
+            title: track.title.clone(),
+            duration: track.duration_secs,
+        };
+        storage::save_last_track(&st);
+    }
+
+    fn resolve_restored_track(&mut self) {
+        if self.restored_track_pending { return; }
+        let Some(saved) = self.restored_track.clone() else { return; };
+        if !self.logged_in || self.token.trim().is_empty() { return; }
+        self.restored_track_pending = true;
+        self.status = "загрузка...".to_string();
+        let token = self.token.clone();
+        let ua = self.ua.clone();
+        let tx = self.ui_evt_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let audios = format!("{}_{}", saved.owner_id, saved.id);
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<Track> {
+                let client = api::build_client(&ua)?;
+                let items: Vec<serde_json::Value> = api::vk_call(&client, &token, "audio.getById", &[("audios", audios.as_str())])?;
+                let item = items.into_iter().next().ok_or_else(|| anyhow::anyhow!("track unavailable"))?;
+                let track = Track::from_value(&item);
+                if !track.is_playable() {
+                    anyhow::bail!("track unavailable");
+                }
+                Ok(track)
+            })();
+            match res {
+                Ok(track) => { let _ = tx.send(UiEvent::RestoredTrackResolved { track }); }
+                Err(_) => { let _ = tx.send(UiEvent::RestoredTrackUnavailable("saved track unavailable".to_string())); }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn handle_media_hotkey(&mut self, kind: MediaHotkey) {
+        match kind {
+            MediaHotkey::PlayPause => {
+                if self.now_playing.is_some() {
+                    let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+                } else if self.restored_track.is_some() {
+                    self.resolve_restored_track();
+                }
+            }
+            MediaHotkey::Stop => { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
+            MediaHotkey::Next => { self.play_next(); }
+            MediaHotkey::Prev => { self.play_prev(); }
+        }
+    }
+
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -722,19 +856,24 @@ fn set_queue_for_my_music(&mut self) {
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) { play_selected = true; }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Space) { pause_resume = true; }
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowRight) { next = true; }
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowLeft) { prev = true; }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { next = true; }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { prev = true; }
         });
         if play_selected {
             if let Some((src, idx)) = self.selected_or_playing_for_current_list() {
                 self.play_from_list(src, idx);
             }
         }
-        if pause_resume { let _ = self.cmd_tx.send(PlayerCmd::PauseResume); }
+        if pause_resume {
+            if self.now_playing.is_some() {
+                let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+            } else if self.restored_track.is_some() {
+                self.resolve_restored_track();
+            }
+        }
         if next { self.play_next(); }
         if prev { self.play_prev(); }
     }
-
     fn refresh_my_music_after_add(&mut self) {
         self.tracks.clear();
         self.tracks_count = None;
@@ -903,7 +1042,22 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.rec_status = msg;
                     }
                 }
-                UiEvent::AddDone { track_id } => {
+                                UiEvent::MediaKey(kind) => {
+                    self.handle_media_hotkey(kind);
+                }
+                UiEvent::RestoredTrackResolved { track } => {
+                    self.restored_track_pending = false;
+                    self.status.clear();
+                    self.restored_track = Some(track.clone());
+                    self.set_queue_for_my_music();
+                    self.pending_play_track_id = Some(TrackId::from_track(&track));
+                    let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
+                }
+                UiEvent::RestoredTrackUnavailable(msg) => {
+                    self.restored_track_pending = false;
+                    self.restored_track = None;
+                    self.status = msg;
+                }                UiEvent::AddDone { track_id } => {
                     self.add_states.insert(track_id, AddState::Done);
                     self.refresh_my_music_after_add();
                 }
@@ -958,16 +1112,24 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.current_gen = generation;
                     self.status = format!("Downloading: {artist} - {title}");
                 }
-                PlayerEvent::Playing { artist, title, duration_secs, generation } => {
+                                PlayerEvent::Playing { artist, title, duration_secs, generation } => {
                     self.current_gen = generation;
                     self.status = String::new();
                     self.seek_drag = None;
+                    let track_id = self.pending_play_track_id.take();
+                    if let Some(tid) = track_id {
+                        let t = self.queue.iter().find(|t| TrackId::from_track(t) == tid).cloned()
+                            .or_else(|| self.tracks.iter().find(|t| TrackId::from_track(t) == tid).cloned())
+                            .or_else(|| self.restored_track.clone().filter(|t| TrackId::from_track(t) == tid));
+                        let save_t = t.unwrap_or_else(|| Track { artist: artist.clone(), title: title.clone(), duration_secs, url: None, owner_id: tid.owner_id, id: tid.id, access_key: None, audio_streams: None });
+                        self.restored_track = Some(save_t.clone());
+                        self.save_last_played_track(&save_t);
+                    }
                     self.now_playing = Some(NowPlaying {
                         artist, title, base_secs: 0.0, started_at: Some(Instant::now()), duration_secs, paused: false,
-                        track_id: self.pending_play_track_id.take(),
+                        track_id,
                     });
-                }
-                PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
+                }                PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
                     self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_id });
                 }
@@ -1253,13 +1415,14 @@ impl eframe::App for GuiAppImpl {
         }
 
         egui::Panel::bottom("bottom").show(ui, |ui| {
-            let now_text = if let Some(np) = &self.now_playing {
+                        let now_text = if let Some(np) = &self.now_playing {
                 format!("{} - {}", np.artist, np.title)
+            } else if let Some(t) = &self.restored_track {
+                format!("{} - {} (готов)", t.artist, t.title)
             } else {
-                "ничего не играет".to_string()
+                "Ничего не играет".to_string()
             };
             ui.add(egui::Label::new(now_text).selectable(false));
-
             ui.horizontal(|ui| {
                 let pos = self.now_playing.as_ref().map(|np| np.position_secs()).unwrap_or(0);
                 let dur = self.now_playing.as_ref().and_then(|np| np.duration_secs).unwrap_or(pos.max(1));
@@ -1289,7 +1452,13 @@ impl eframe::App for GuiAppImpl {
             ui.horizontal(|ui| {
                 if ui.button("Prev").clicked() { self.play_prev(); }
                 let pause_label = if self.now_playing.as_ref().map(|n| n.paused).unwrap_or(false) { "Resume" } else { "Pause" };
-                if ui.button(pause_label).clicked() { let _ = self.cmd_tx.send(PlayerCmd::PauseResume); }
+                if ui.button(pause_label).clicked() {
+                    if self.now_playing.is_some() {
+                        let _ = self.cmd_tx.send(PlayerCmd::PauseResume);
+                    } else if self.restored_track.is_some() {
+                        self.resolve_restored_track();
+                    }
+                }
                 if ui.button("Next").clicked() { self.play_next(); }
                 if ui.button("Stop").clicked() { let _ = self.cmd_tx.send(PlayerCmd::Stop); }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1305,6 +1474,9 @@ impl eframe::App for GuiAppImpl {
                 });
             });
 
+            if !self.hotkey_status.is_empty() {
+                ui.add(egui::Label::new(&self.hotkey_status).selectable(false));
+            }
             if !self.status.is_empty() {
                 ui.add(egui::Label::new(&self.status).selectable(false));
             }

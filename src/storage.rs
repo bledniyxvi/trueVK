@@ -1,4 +1,4 @@
-﻿use anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -7,9 +7,23 @@ const SERVICE: &str = "vkmusic";
 const TOKEN_USER: &str = "vk_token";
 const UA_USER: &str = "vk_ua";
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SavedTrack {
+    pub owner_id: i64,
+    pub audio_id: i64,
+    #[serde(default)]
+    pub access_key: Option<String>,
+    pub artist: String,
+    pub title: String,
+    #[serde(default)]
+    pub duration: Option<u64>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Settings {
     volume: Option<f32>,
+    #[serde(default)]
+    last_track: Option<SavedTrack>,
 }
 
 pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
@@ -42,6 +56,16 @@ pub fn save_volume(volume: f32) {
     let volume = volume.clamp(0.0, 1.0);
     let mut settings = load_settings();
     settings.volume = Some(volume);
+    let _ = save_settings(&settings);
+}
+
+pub fn load_last_track() -> Option<SavedTrack> {
+    load_settings().last_track
+}
+
+pub fn save_last_track(track: &SavedTrack) {
+    let mut settings = load_settings();
+    settings.last_track = Some(track.clone());
     let _ = save_settings(&settings);
 }
 
