@@ -13,6 +13,7 @@ const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{044
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
 const SHUFFLE_ON: &str = "\u{0432}\u{043A}\u{043B}";
 const SHUFFLE_OFF: &str = "\u{0432}\u{044B}\u{043A}\u{043B}";
+const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -302,6 +303,7 @@ struct GuiAppImpl {
     rec_no_more: bool,
     rec_request_id: u64,
     rec_waiting_next: bool,
+    rec_empty_retries: u8,
 
     queue: Vec<Track>,
     queue_source: QueueSource,
@@ -433,6 +435,7 @@ impl GuiAppImpl {
             rec_no_more: false,
             rec_request_id: 0,
             rec_waiting_next: false,
+            rec_empty_retries: 0,
 
             queue: Vec::new(),
             queue_source: QueueSource::MyMusic,
@@ -737,6 +740,20 @@ impl GuiAppImpl {
             ctx.request_repaint();
         });
     }
+
+    fn retry_recommendations_after_empty(&mut self) {
+        self.rec_empty_retries = self.rec_empty_retries.saturating_add(1);
+        if self.rec_empty_retries >= 3 {
+            self.status = REC_NO_SUITABLE_TRACKS_TEXT.to_string();
+            self.rec_status = REC_NO_SUITABLE_TRACKS_TEXT.to_string();
+            self.now_playing = None;
+            self.sync_tray_tooltip("vkmusic");
+            return;
+        }
+        self.rec_waiting_next = true;
+        self.request_recommendations_more();
+    }
+
     fn logout_to_login(&mut self, message: Option<String>) {
         storage::delete_credentials();
         self.token.clear();
@@ -750,7 +767,7 @@ impl GuiAppImpl {
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
         self.selected_playlist = None; self.playlist_tracks.clear(); self.playlist_tracks_count = None; self.loading_playlist_tracks = false; self.playlist_tracks_offset = 0; self.playlist_status.clear();
         self.search_query.clear(); self.search_input.clear(); self.search_tracks.clear(); self.search_count = None; self.loading_search = false; self.search_offset = 0; self.search_status.clear(); self.search_request_id = 0;
-        self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false;
+        self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false; self.rec_empty_retries = 0;
 
         self.queue.clear(); self.queue_source = QueueSource::MyMusic; self.queue_playlist = None; self.queue_search_query = None;
         self.clear_shuffle_round();
@@ -825,6 +842,7 @@ fn set_queue_for_my_music(&mut self) {
             QueueSource::Recommendations => self.set_queue_for_recommendations(),
         }
         self.selected_index = Some(index);
+        self.rec_empty_retries = 0;
         let tid = TrackId::from_track(&track);
         self.sync_shuffle_queue();
         self.mark_shuffle_played(tid);
@@ -836,6 +854,7 @@ fn set_queue_for_my_music(&mut self) {
         let Some(pos) = self.queue.iter().position(|t| TrackId::from_track(t) == track_id) else { return; };
         let track = self.queue[pos].clone();
         if !track.is_playable() { return; }
+        self.rec_empty_retries = 0;
         self.pending_play_track_id = Some(track_id);
         let _ = self.cmd_tx.send(PlayerCmd::PlayTrack { track });
     }
@@ -1404,31 +1423,34 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         }
                     }
                 }
-                                 UiEvent::RecommendationsLoaded { request_id, replace, items } => {
-                     let was_waiting_next = self.rec_waiting_next;
-                     let cur = self.now_playing.as_ref().and_then(|np| np.track_id);
-                     self.append_recommendations(request_id, replace, items);
-                     if was_waiting_next {
-                         self.rec_waiting_next = false;
-                         if self.queue_source == QueueSource::Recommendations {
-                             self.sync_shuffle_queue();
-                             if let Some(cur_id) = cur {
-                                 let next = if self.shuffle {
-                                     self.shuffle_next_id(cur_id)
-                                 } else {
-                                     self.find_next_playable_id(cur_id, 1)
-                                 };
-                                 if let Some(next) = next {
-                                     if self.shuffle { self.start_shuffle_track(next); } else { self.play_track_id(next); }
-                                 } else if self.rec_no_more {
-                                     self.now_playing = None;
-                                 }
-                             } else if self.rec_no_more {
-                                 self.now_playing = None;
-                             }
-                         }
-                     }
-                 }UiEvent::RecommendationsError { request_id, msg } => {
+                UiEvent::RecommendationsLoaded { request_id, replace, items } => {
+                    let was_waiting_next = self.rec_waiting_next;
+                    let cur = self.now_playing.as_ref().and_then(|np| np.track_id);
+                    self.append_recommendations(request_id, replace, items);
+                    if was_waiting_next {
+                        self.rec_waiting_next = false;
+                        if self.queue_source == QueueSource::Recommendations {
+                            self.sync_shuffle_queue();
+                            let next = if let Some(cur_id) = cur {
+                                if self.shuffle {
+                                    self.shuffle_next_id(cur_id)
+                                } else {
+                                    self.find_next_playable_id(cur_id, 1)
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(next) = next {
+                                if self.shuffle { self.start_shuffle_track(next); } else { self.play_track_id(next); }
+                            } else if self.rec_no_more {
+                                self.now_playing = None;
+                            } else {
+                                self.retry_recommendations_after_empty();
+                            }
+                        }
+                    }
+                }
+                UiEvent::RecommendationsError { request_id, msg } => {
                     if request_id != self.rec_request_id { continue; }
                     self.rec_loading = false;
                     self.rec_waiting_next = false;
