@@ -645,12 +645,19 @@ pub fn run_gui(env_token: Option<String>, env_ua: Option<String>, single_instanc
 
     let mut options = eframe::NativeOptions::default();
     options.glow_options.vsync = true;
-    options.viewport = options
+    let mut viewport = options
         .viewport
         .with_title(theme::APP_NAME)
         .with_icon(window_icon)
-        .with_inner_size([720.0, 640.0])
         .with_min_inner_size([640.0, 480.0]);
+    if let Some((x, y, w, h)) = storage::load_window_geometry() {
+        viewport = viewport
+            .with_position([x, y])
+            .with_inner_size([w.max(640.0), h.max(480.0)]);
+    } else {
+        viewport = viewport.with_inner_size([720.0, 640.0]);
+    }
+    options.viewport = viewport;
     eframe::run_native(
         theme::APP_NAME,
         options,
@@ -980,9 +987,66 @@ impl GuiAppImpl {
         app.register_media_hotkeys();
         app.build_tray();
         if app.logged_in {
+            app.load_cached_lists();
             app.request_tracks_load();
         }
         app
+    }
+    fn load_cached_lists(&mut self) {
+        let Some(cache) = storage::load_cache() else { return; };
+        if let Some(arr) = cache.get("tracks").and_then(|v| v.as_array()) {
+            let tracks: Vec<Track> = arr.iter().map(Track::from_value).collect();
+            if !tracks.is_empty() {
+                self.tracks = tracks;
+                self.tracks_version += 1;
+            }
+        }
+        if let Some(c) = cache.get("tracks_count").and_then(|v| v.as_u64()) {
+            self.tracks_count = Some(c);
+        }
+        if let Some(arr) = cache.get("playlists").and_then(|v| v.as_array()) {
+            let playlists: Vec<PlaylistView> = arr.iter().filter_map(|v| api::Playlist::from_value(v).map(PlaylistView::from_api)).collect();
+            if !playlists.is_empty() {
+                self.playlists = playlists;
+            }
+        }
+        if let Some(c) = cache.get("playlists_count").and_then(|v| v.as_u64()) {
+            self.playlists_count = Some(c);
+        }
+    }
+    fn persist_tracks_cache(&self) {
+        let mut cache = storage::load_cache().unwrap_or_else(|| serde_json::json!({}));
+        if !cache.is_object() { cache = serde_json::json!({}); }
+        let tracks: Vec<serde_json::Value> = self.tracks.iter().take(100).map(|t| serde_json::json!({
+            "owner_id": t.owner_id, "id": t.id, "access_key": t.access_key,
+            "artist": t.artist, "title": t.title, "duration": t.duration_secs,
+        })).collect();
+        cache["tracks"] = serde_json::Value::Array(tracks);
+        cache["tracks_count"] = serde_json::json!(self.tracks_count);
+        storage::save_cache(&cache);
+    }
+    fn persist_playlists_cache(&self) {
+        let mut cache = storage::load_cache().unwrap_or_else(|| serde_json::json!({}));
+        if !cache.is_object() { cache = serde_json::json!({}); }
+        let playlists: Vec<serde_json::Value> = self.playlists.iter().take(100).map(|p| serde_json::json!({
+            "owner_id": p.owner_id, "id": p.id, "access_key": p.access_key,
+            "title": p.title, "count": p.count,
+        })).collect();
+        cache["playlists"] = serde_json::Value::Array(playlists);
+        cache["playlists_count"] = serde_json::json!(self.playlists_count);
+        storage::save_cache(&cache);
+    }
+    fn persist_window_geometry(&self, ctx: &egui::Context) {
+        let geo = ctx.input(|i| {
+            let v = i.viewport();
+            if v.minimized.unwrap_or(false) { return None; }
+            let o = v.outer_rect?;
+            let inn = v.inner_rect?;
+            Some((o.min.x, o.min.y, inn.width(), inn.height()))
+        });
+        if let Some((x, y, w, h)) = geo {
+            storage::save_window_geometry(x, y, w, h);
+        }
     }
     fn request_tracks_load(&mut self) {
         if self.loading_tracks { return; }
@@ -1912,6 +1976,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
     fn handle_events(&mut self, ctx: &egui::Context) {
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         if close_requested && !self.quit_requested {
+            self.persist_window_geometry(ctx);
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.window_hidden = true;
@@ -1922,8 +1987,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     if offset == self.next_offset {
                         let old_offset = self.next_offset;
                         let no_progress = items.is_empty();
-                        self.next_offset += items.len();
-                        self.tracks.extend(items);
+                        let added = items.len();
+                        self.next_offset += added;
+                        if offset == 0 {
+                            self.tracks = items;
+                        } else {
+                            self.tracks.extend(items);
+                        }
                         self.tracks_version += 1;
                         if let Some(c) = count { self.tracks_count = Some(c); }
                         self.loading_tracks = false;
@@ -1939,15 +2009,26 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         if self.queue_source == QueueSource::MyMusic && self.my_filter.trim().is_empty() {
                             self.queue = self.tracks.clone();
                         }
+                        if offset == 0 {
+                            self.persist_tracks_cache();
+                        }
                     }
                 }
                 UiEvent::PlaylistsLoaded { offset, count, items } => {
                     if offset == self.playlists_offset {
-                        self.playlists_offset += items.len();
-                        self.playlists.extend(items);
+                        let added = items.len();
+                        self.playlists_offset += added;
+                        if offset == 0 {
+                            self.playlists = items;
+                        } else {
+                            self.playlists.extend(items);
+                        }
                         if let Some(c) = count { self.playlists_count = Some(c); }
                         self.loading_playlists = false;
                         self.playlists_status.clear();
+                        if offset == 0 {
+                            self.persist_playlists_cache();
+                        }
                     }
                 }
                 UiEvent::PlaylistTracksLoaded { playlist_id, owner_id, offset, count, items } => {
@@ -2041,6 +2122,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.play_next();
                     } else if id == self.tray_menu_quit_id {
                         self.quit_requested = true;
+                        self.persist_window_geometry(ctx);
                         let _ = self.cmd_tx.send(PlayerCmd::Shutdown);
                         self._tray_icon.take();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);

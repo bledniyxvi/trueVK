@@ -29,6 +29,14 @@ struct Settings {
     repeat: Option<String>,
     #[serde(default)]
     shuffle: bool,
+    #[serde(default)]
+    window_x: Option<f32>,
+    #[serde(default)]
+    window_y: Option<f32>,
+    #[serde(default)]
+    window_w: Option<f32>,
+    #[serde(default)]
+    window_h: Option<f32>,
 }
 
 pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
@@ -96,6 +104,43 @@ pub fn save_shuffle(shuffle: bool) {
     let mut settings = load_settings();
     settings.shuffle = shuffle;
     let _ = save_settings(&settings);
+}
+
+pub fn load_window_geometry() -> Option<(f32, f32, f32, f32)> {
+    let s = load_settings();
+    Some((s.window_x?, s.window_y?, s.window_w?, s.window_h?))
+}
+
+pub fn save_window_geometry(x: f32, y: f32, w: f32, h: f32) {
+    let mut settings = load_settings();
+    settings.window_x = Some(x);
+    settings.window_y = Some(y);
+    settings.window_w = Some(w);
+    settings.window_h = Some(h);
+    let _ = save_settings(&settings);
+}
+
+fn cache_path() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(PathBuf::from(appdata).join("vkmusic").join("cache.json"))
+}
+
+pub fn load_cache() -> Option<serde_json::Value> {
+    let path = cache_path()?;
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+}
+
+pub fn save_cache(value: &serde_json::Value) {
+    let Some(path) = cache_path() else { return; };
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    if let Ok(data) = serde_json::to_vec(value) {
+        let _ = fs::write(path, data);
+    }
 }
 
 fn read_secret(user: &str) -> Option<String> {

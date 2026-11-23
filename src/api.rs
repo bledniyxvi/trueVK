@@ -138,6 +138,9 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
     let parsed: VkResponse<T> = serde_json::from_value(body)
         .with_context(|| format!("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{043f}\u{0440}\u{043e}\u{0447}\u{0438}\u{0442}\u{0430}\u{0442}\u{044c} \u{043e}\u{0442}\u{0432}\u{0435}\u{0442}: {method}"))?;
     if let Some(err) = parsed.error {
+        if err.error_code == Some(14) {
+            return Err(anyhow!("VK \u{0442}\u{0440}\u{0435}\u{0431}\u{0443}\u{0435}\u{0442} \u{043a}\u{0430}\u{043f}\u{0447}\u{0443}, \u{043f}\u{043e}\u{043f}\u{0440}\u{043e}\u{0431}\u{0443}\u{0439}\u{0442}\u{0435} \u{043f}\u{043e}\u{0437}\u{0436}\u{0435}"));
+        }
         let code = err
             .error_code
             .map(|c| c.to_string())
