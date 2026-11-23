@@ -123,6 +123,7 @@ struct ShuffleQueueKey {
     filter: String,
 }
 
+#[derive(Clone, Copy)]
 struct Xorshift64(u64);
 
 impl Xorshift64 {
@@ -1448,6 +1449,50 @@ fn set_queue_for_my_music(&mut self) {
         self.advance_next(true);
     }
 
+    fn peek_next_track(&self) -> Option<Track> {
+        let cur = self.now_playing.as_ref().and_then(|np| np.track_id)?;
+        let tid = if self.repeat_mode == RepeatMode::One {
+            if self.queue.iter().any(|t| TrackId::from_track(t) == cur && t.is_playable()) { Some(cur) } else { None }
+        } else if self.shuffle {
+            let candidates = self.shuffle_candidates();
+            let mut rng = self.shuffle_rng;
+            match pick_shuffle_id(&candidates, &self.shuffle_played, &mut rng, Some(cur)) {
+                Some(n) => Some(n),
+                None => {
+                    if self.repeat_mode == RepeatMode::All {
+                        let empty: HashSet<TrackId> = HashSet::new();
+                        let mut rng2 = self.shuffle_rng;
+                        pick_shuffle_id(&candidates, &empty, &mut rng2, Some(cur))
+                            .or_else(|| if candidates.contains(&cur) { Some(cur) } else { None })
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else {
+            match self.find_next_playable_id(cur, 1) {
+                Some(n) => Some(n),
+                None => {
+                    if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
+                        None
+                    } else if self.repeat_mode == RepeatMode::All {
+                        self.first_playable_in_queue()
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        let tid = tid?;
+        self.queue.iter().find(|t| TrackId::from_track(t) == tid).cloned()
+    }
+
+    fn preload_next(&mut self) {
+        if let Some(track) = self.peek_next_track() {
+            let _ = self.cmd_tx.send(PlayerCmd::Preload { track });
+        }
+    }
+
     fn advance_next(&mut self, autoplay: bool) {
         let Some(cur) = self.now_playing.as_ref().and_then(|np| np.track_id) else { return; };
         if autoplay && self.repeat_mode == RepeatMode::One {
@@ -2124,6 +2169,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         track_id,
                     });
                     self.sync_tray_tooltip(&tooltip);
+                    self.preload_next();
                 }
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);

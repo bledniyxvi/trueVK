@@ -6,18 +6,25 @@ use std::io::{Cursor, Read};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{Receiver, Sender},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
 
 pub enum PlayerCmd {
     PlayTrack { track: Track },
+    Preload { track: Track },
     PauseResume,
     Stop,
     SetVolume(f32),
     Seek(u64),
     Shutdown,
+}
+
+struct PreloadEntry {
+    owner_id: i64,
+    id: i64,
+    bytes: Arc<Vec<u8>>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,17 +85,27 @@ fn worker_loop(
     let mut state: Option<PlayingState> = None;
     let mut volume: f32 = 1.0;
     let current_generation = Arc::new(AtomicU64::new(0));
+    let preload_slot: Arc<Mutex<Option<PreloadEntry>>> = Arc::new(Mutex::new(None));
+    let preload_req = Arc::new(AtomicU64::new(0));
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             PlayerCmd::Shutdown => {
+                *preload_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 if let Some(s) = state.take() {
+                    if !s.paused {
+                        fade_out(&s.player, s.player.volume());
+                    }
                     s.stop();
                 }
                 break;
             }
             PlayerCmd::Stop => {
+                *preload_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 if let Some(s) = state.take() {
+                    if !s.paused {
+                        fade_out(&s.player, s.player.volume());
+                    }
                     s.stop();
                 }
                 send_evt(&evt_tx, &ctx, PlayerEvent::Stopped);
@@ -138,7 +155,9 @@ fn worker_loop(
             PlayerCmd::PauseResume => {
                 if let Some(s) = state.as_mut() {
                     if s.paused {
+                        s.player.set_volume(0.0);
                         s.player.play();
+                        fade_in(&s.player, volume);
                         s.paused = false;
                         send_evt(
                             &evt_tx,
@@ -151,7 +170,9 @@ fn worker_loop(
                             },
                         );
                     } else {
+                        fade_out(&s.player, s.player.volume());
                         s.player.pause();
+                        s.player.set_volume(volume);
                         s.paused = true;
                         send_evt(
                             &evt_tx,
@@ -168,8 +189,23 @@ fn worker_loop(
             }
             PlayerCmd::PlayTrack { track } => {
                 if let Some(s) = state.take() {
+                    if !s.paused {
+                        fade_out(&s.player, s.player.volume());
+                    }
                     s.stop();
                 }
+                preload_req.fetch_add(1, Ordering::Relaxed);
+                let preloaded = {
+                    let mut slot = preload_slot.lock().unwrap_or_else(|e| e.into_inner());
+                    match slot.as_ref() {
+                        Some(entry) if entry.owner_id == track.owner_id && entry.id == track.id => {
+                            let bytes = Arc::clone(&entry.bytes);
+                            *slot = None;
+                            Some(bytes)
+                        }
+                        _ => None,
+                    }
+                };
                 let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
                 current_generation.store(generation, Ordering::Relaxed);
                 send_evt(
@@ -181,23 +217,65 @@ fn worker_loop(
                         generation,
                     },
                 );
-                match play_track(&client, track, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
+                match play_track(&client, track, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation), preloaded) {
                     Ok(s) => state = Some(s),
                     Err(e) => {
                         send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
                     }
                 }
             }
-        }
-
-        // drain stale Ended events handling: monitor thread sends Ended; UI handles it.
-        // Cleanup finished state if ended
-        if let Some(s) = state.as_ref() {
-            if s.player.empty() && !s.paused {
-                // monitor will report Ended; keep state until Stop/PlayTrack/Shutdown
+            PlayerCmd::Preload { track } => {
+                let already = {
+                    let slot = preload_slot.lock().unwrap_or_else(|e| e.into_inner());
+                    slot.as_ref().map(|e| (e.owner_id, e.id)) == Some((track.owner_id, track.id))
+                };
+                if already {
+                    continue;
+                }
+                let req = preload_req.fetch_add(1, Ordering::Relaxed) + 1;
+                let slot = Arc::clone(&preload_slot);
+                let req_flag = Arc::clone(&preload_req);
+                let client2 = client.clone();
+                thread::spawn(move || {
+                    let url = match select_play_url(&client2, &track) {
+                        Ok(u) => u,
+                        Err(_) => return,
+                    };
+                    let bytes = match download_track_bytes(&client2, &url) {
+                        Ok(b) => Arc::new(b),
+                        Err(_) => return,
+                    };
+                    if req_flag.load(Ordering::Relaxed) != req {
+                        return;
+                    }
+                    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+                    if req_flag.load(Ordering::Relaxed) == req {
+                        *slot = Some(PreloadEntry { owner_id: track.owner_id, id: track.id, bytes });
+                    }
+                });
             }
         }
     }
+}
+
+fn fade_out(player: &Player, start: f32) {
+    let steps = 6u32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        player.set_volume(start * (1.0 - t));
+        thread::sleep(Duration::from_millis(5));
+    }
+    player.set_volume(0.0);
+}
+
+fn fade_in(player: &Player, target: f32) {
+    let steps = 6u32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        player.set_volume(target * t);
+        thread::sleep(Duration::from_millis(5));
+    }
+    player.set_volume(target);
 }
 
 fn play_track(
@@ -208,9 +286,15 @@ fn play_track(
     volume: f32,
     generation: u64,
     current_generation: Arc<AtomicU64>,
+    preloaded: Option<Arc<Vec<u8>>>,
 ) -> Result<PlayingState> {
-    let url = select_play_url(client, &track)?;
-    let bytes = Arc::new(download_track_bytes(client, &url)?);
+    let bytes = match preloaded {
+        Some(b) => b,
+        None => {
+            let url = select_play_url(client, &track)?;
+            Arc::new(download_track_bytes(client, &url)?)
+        }
+    };
     let duration_secs = decode_duration(Arc::clone(&bytes)).map(|d| d.as_secs()).or(track.duration_secs);
 
     let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
