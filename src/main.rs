@@ -1,4 +1,4 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::env;
@@ -21,8 +21,6 @@ const TRACK_LIMIT: usize = 20;
 const PLAYLIST_LIMIT: usize = 20;
 const SEARCH_LIMIT: usize = 10;
 const PLAYLIST_TRACK_LIMIT: usize = 10;
-const PROBE_TRACK_LIMIT: usize = 2;
-const PROBE_BYTES: usize = 16;
 const CRASH_LOG_MAX_BYTES: u64 = 200 * 1024;
 const FPS_LOG_MAX_BYTES: u64 = 100 * 1024;
 
@@ -146,21 +144,15 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let gui_mode = args.iter().any(|a| a == "--gui");
-    let shape_mode = args.iter().any(|arg| arg == "--shape");
     let playlists_mode = args.iter().any(|arg| arg == "--playlists");
     let probe_mode = args.iter().any(|arg| arg == "--probe");
-    let probe_bytes_mode = args.iter().any(|arg| arg == "--probe-bytes");
-    let probe_mix_mode = args.iter().any(|arg| arg == "--probe-mix");
     let search_query = arg_value(&args, "--search");
     let playlist_index = arg_value(&args, "--playlist");
     let play_index = arg_value(&args, "--play");
     let play_seconds = arg_value(&args, "--seconds");
 
-    let cli_mode = shape_mode
-        || playlists_mode
+    let cli_mode = playlists_mode
         || probe_mode
-        || probe_bytes_mode
-        || probe_mix_mode
         || search_query.is_some()
         || playlist_index.is_some()
         || play_index.is_some();
@@ -196,14 +188,6 @@ fn run() -> Result<()> {
         run_probe(&client, &token)?;
         return Ok(());
     }
-    if probe_bytes_mode {
-        run_probe_bytes(&client, &token)?;
-        return Ok(());
-    }
-    if probe_mix_mode {
-        run_probe_mix(&client, &token)?;
-        return Ok(());
-    }
     if let Some(query) = search_query {
         run_search(&client, &token, &query)?;
         return Ok(());
@@ -233,10 +217,6 @@ fn run() -> Result<()> {
     )?;
     let count = response.count;
     let items = response.items.unwrap_or_default();
-    if shape_mode {
-        print_shape(&items)?;
-        return Ok(());
-    }
     print_tracks(count, &items);
     Ok(())
 }
@@ -334,272 +314,6 @@ fn run_probe(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_probe_bytes(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
-    let response: AudioGetResponse = api::vk_call(
-        client,
-        token,
-        "audio.get",
-        &[("count", PROBE_TRACK_LIMIT.to_string().as_str())],
-    )?;
-    let items = response.items.unwrap_or_default();
-    for (idx, item) in items.iter().take(PROBE_TRACK_LIMIT).enumerate() {
-        let track_n = idx + 1;
-        let artist = api::string_field(item, "artist");
-        let title = api::string_field(item, "title");
-        safe_println!("track {track_n} | meta | {artist} - {title}");
-        print_expires_remaining(item);
-
-        if let Some(url) = item.get("url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-            probe_one(client, track_n, "main", url);
-        } else {
-            safe_println!("track {track_n} | main | request failed (missing url)");
-        }
-
-        if let Some(streams) = item.get("audio_streams").and_then(Value::as_array) {
-            for stream in streams {
-                let stype = stream.get("type").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("<missing>");
-                if let Some(url) = stream.get("url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-                    probe_one(client, track_n, &format!("{stype} url"), url);
-                } else {
-                    safe_println!("track {track_n} | {stype} url | request failed (missing url)");
-                }
-                if let Some(fb) = stream.get("fallback_url").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-                    probe_one(client, track_n, &format!("{stype} fallback"), fb);
-                } else {
-                    safe_println!("track {track_n} | {stype} fallback | request failed (missing url)");
-                }
-            }
-        } else {
-            safe_println!("track {track_n} | audio_streams | request failed (missing audio_streams)");
-        }
-    }
-    Ok(())
-}
-
-fn run_probe_mix(client: &reqwest::blocking::Client, token: &str) -> Result<()> {
-    use std::collections::HashSet;
-
-    #[cfg(windows)]
-    unsafe {
-        // Set console output to UTF-8 for readable Cyrillic in "artist - title".
-        unsafe extern "system" {
-            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
-        }
-        let _ = SetConsoleOutputCP(65001);
-    }
-
-    safe_println!("Probe-mix: read-only audio.getRecommendations checks. No token/URLs printed.");
-    safe_println!("Source: vodka2/vk-audio-token src/examples/usage/example_kate.php shows audio.getRecommendations with count,v. dev.vk.com pages JS-rendered; no reliable extra params extracted. Not inventing params.");
-
-    let base: AudioGetResponse = api::vk_call(
-        client,
-        token,
-        "audio.get",
-        &[("count", TRACK_LIMIT.to_string().as_str())],
-    )?;
-    let base_items = base.items.unwrap_or_default();
-    let base_ids: HashSet<String> = base_items.iter().filter_map(track_id).collect();
-    safe_println!("audio.get first page: count={} ids={}", base_items.len(), base_ids.len());
-
-    // 1) Three calls in a row, count=10, overlap 1-2,2-3,1-3.
-    safe_println!("--- three_calls_count_10 ---");
-    let mut calls: Vec<Vec<Value>> = Vec::new();
-    for i in 0..3 {
-        let resp = api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]);
-        match resp {
-            Ok(v) => {
-                let items = extract_items(&v);
-                safe_println!("call{} ok=true items={}", i + 1, items.len());
-                calls.push(items);
-            }
-            Err(e) => {
-                let msg = api::sanitize_output(&format!("{e:#}"));
-                let (code, emsg) = parse_vk_error_fields(&msg);
-                safe_println!("call{} ok=false error_code={} error_msg={}", i + 1, code, emsg);
-                calls.push(Vec::new());
-            }
-        }
-    }
-    let ids0: HashSet<String> = calls.get(0).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
-    let ids1: HashSet<String> = calls.get(1).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
-    let ids2: HashSet<String> = calls.get(2).into_iter().flat_map(|v| v.iter()).filter_map(track_id).collect();
-    safe_println!("overlap_call1_call2: {}", ids0.intersection(&ids1).count());
-    safe_println!("overlap_call2_call3: {}", ids1.intersection(&ids2).count());
-    safe_println!("overlap_call1_call3: {}", ids0.intersection(&ids2).count());
-
-    // 2) count=50, items count and unique ids.
-    safe_println!("--- count_50 ---");
-    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "50")]) {
-        Ok(v) => {
-            let items = extract_items(&v);
-            let unique: HashSet<String> = items.iter().filter_map(track_id).collect();
-            safe_println!("ok=true items={} unique_ids={}", items.len(), unique.len());
-        }
-        Err(e) => {
-            let msg = api::sanitize_output(&format!("{e:#}"));
-            let (code, emsg) = parse_vk_error_fields(&msg);
-            safe_println!("ok=false error_code={} error_msg={} items=0 unique_ids=0", code, emsg);
-        }
-    }
-
-    // 3) count=10 offset=10, overlap with call 1.
-    safe_println!("--- count_10_offset_10 ---");
-    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10"), ("offset", "10")]) {
-        Ok(v) => {
-            let items = extract_items(&v);
-            let off_ids: HashSet<String> = items.iter().filter_map(track_id).collect();
-            safe_println!("ok=true items={} overlap_with_call1={}", items.len(), off_ids.intersection(&ids0).count());
-        }
-        Err(e) => {
-            let msg = api::sanitize_output(&format!("{e:#}"));
-            let (code, emsg) = parse_vk_error_fields(&msg);
-            safe_println!("ok=false error_code={} error_msg={}", code, emsg);
-        }
-    }
-
-    // 4) Top-level keys of response object (not only items).
-    safe_println!("--- response_top_level_keys ---");
-    match api::vk_call::<Value>(client, token, "audio.getRecommendations", &[("count", "10")]) {
-        Ok(v) => {
-            match &v {
-                Value::Object(obj) => {
-                    let mut keys: Vec<&String> = obj.keys().collect();
-                    keys.sort();
-                    let joined = keys.into_iter().map(String::as_str).collect::<Vec<_>>().join(",");
-                    safe_println!("ok=true top_level_keys={}", joined);
-                }
-                Value::Array(_) => {
-                    safe_println!("ok=true top_level_keys=<array_response>");
-                }
-                _ => {
-                    safe_println!("ok=true top_level_keys=<non_object>");
-                }
-            }
-            let items = extract_items(&v);
-            for (i, item) in items.iter().take(5).enumerate() {
-                let artist = api::string_field(item, "artist");
-                let title = api::string_field(item, "title");
-                safe_println!("top{}: {} - {}", i + 1, artist, title);
-            }
-        }
-        Err(e) => {
-            let msg = api::sanitize_output(&format!("{e:#}"));
-            let (code, emsg) = parse_vk_error_fields(&msg);
-            safe_println!("ok=false error_code={} error_msg={}", code, emsg);
-        }
-    }
-
-    Ok(())
-}
-
-fn extract_items(resp: &Value) -> Vec<Value> {
-    match resp {
-        Value::Array(arr) => arr.clone(),
-        Value::Object(obj) => match obj.get("items") {
-            Some(Value::Array(arr)) => arr.clone(),
-            _ => Vec::new(),
-        },
-        _ => Vec::new(),
-    }
-}
-
-fn track_id(item: &Value) -> Option<String> {
-    let owner = item.get("owner_id").and_then(Value::as_i64)?;
-    let id = item.get("id").and_then(Value::as_i64)?;
-    Some(format!("{owner}_{id}"))
-}
-
-fn parse_vk_error_fields(msg: &str) -> (String, String) {
-    if let Some(rest) = msg.strip_prefix("VK API error ") {
-        if let Some((code, emsg)) = rest.split_once(": ") {
-            return (code.to_string(), emsg.to_string());
-        }
-        return (rest.to_string(), "<missing>".to_string());
-    }
-    ("<none>".to_string(), msg.to_string())
-}
-
-fn print_expires_remaining(item: &Value) {
-    let expires = item
-        .get("url")
-        .and_then(Value::as_str)
-        .and_then(|u| reqwest::Url::parse(u).ok())
-        .and_then(|u| u.query_pairs().find(|(k, _)| k == "expires").map(|(_, v)| v.to_string()));
-    let Some(raw) = expires else { safe_println!("  expires_hours_remaining: <missing>"); return; };
-    let Ok(mut secs) = raw.parse::<i64>() else { safe_println!("  expires_hours_remaining: <invalid>"); return; };
-    if secs > 1_000_000_000_000 { secs /= 1000; }
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    let hours = ((secs - now) as f64 / 3600.0 * 100.0).round() / 100.0;
-    safe_println!("  expires_hours_remaining: {hours}");
-}
-
-fn probe_one(client: &reqwest::blocking::Client, track_n: usize, source: &str, url: &str) {
-    let resp = match client.get(url).header(reqwest::header::RANGE, "bytes=0-15").send() {
-        Ok(r) => r,
-        Err(e) => { safe_println!("track {track_n} | {source} | {}", api::sanitize_output(&short_reqwest_error(e))); return; }
-    };
-    let status = resp.status().as_u16();
-    let content_type = header_str(resp.headers(), "content-type");
-    let content_length = header_str(resp.headers(), "content-length");
-    let content_range = header_str(resp.headers(), "content-range");
-    let accept_ranges = header_str(resp.headers(), "accept-ranges");
-    let final_host = resp.url().host_str().unwrap_or("<missing>").to_string();
-    let mut buf = [0u8; PROBE_BYTES];
-    let mut read_total = 0usize;
-    let mut body = resp;
-    loop {
-        if read_total >= PROBE_BYTES { break; }
-        match body.read(&mut buf[read_total..PROBE_BYTES]) {
-            Ok(0) => break,
-            Ok(n) => read_total += n,
-            Err(e) => {
-                safe_println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | <read-error:{}> | unknown", api::sanitize_output(&e.to_string()));
-                return;
-            }
-        }
-    }
-    let hex = bytes_hex(&buf[..read_total]);
-    let guess = format_guess(&buf[..read_total]);
-    safe_println!("track {track_n} | {source} | {status} | {content_type} | {content_length} | {content_range} | {accept_ranges} | {final_host} | {hex} | {guess}");
-}
-
-fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> String {
-    headers.get(name).and_then(|v| v.to_str().ok()).filter(|s| !s.is_empty()).unwrap_or("<missing>").to_string()
-}
-
-fn bytes_hex(bytes: &[u8]) -> String {
-    if bytes.is_empty() { return "<empty>".to_string(); }
-    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
-}
-
-fn format_guess(bytes: &[u8]) -> &'static str {
-    if bytes.starts_with(b"ID3") { return "mp3+id3"; }
-    if bytes.len() >= 2 && bytes[0] == 0xFF {
-        let b1 = bytes[1];
-        if (b1 & 0xE0) == 0xE0 {
-            if b1 == 0xF1 || b1 == 0xF9 { return "aac adts"; }
-            if b1 == 0xFB || b1 == 0xF3 || b1 == 0xF2 || b1 == 0xFA { return "mpeg audio frame"; }
-            return "mpeg audio frame";
-        }
-    }
-    if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" { return "mp4/m4a"; }
-    if bytes.starts_with(b"fLaC") { return "flac"; }
-    if bytes.starts_with(b"OggS") { return "ogg"; }
-    if bytes.starts_with(b"#EXTM3U") { return "hls playlist"; }
-    if bytes.first() == Some(&0x47) { return "mpeg-ts"; }
-    if bytes.first() == Some(&b'<') { return "xml"; }
-    "unknown"
-}
-
-fn short_reqwest_error(err: reqwest::Error) -> String {
-    let err = err.without_url();
-    if let Some(status) = err.status() { format!("request failed (status {})", status.as_u16()) }
-    else if err.is_timeout() { "request failed (timeout)".to_string() }
-    else if err.is_connect() { "request failed (connect)".to_string() }
-    else if err.is_decode() { "request failed (decode)".to_string() }
-    else { "request failed".to_string() }
-}
-
 fn run_search(client: &reqwest::blocking::Client, token: &str, query: &str) -> Result<()> {
     let count = SEARCH_LIMIT.to_string();
     let response: AudioGetResponse = api::vk_call(
@@ -653,16 +367,6 @@ fn print_tracks(count: Option<u64>, items: &[Value]) {
     }
 }
 
-fn print_shape(items: &[Value]) -> Result<()> {
-    let Some(first) = items.first() else { safe_println!("No tracks in response; nothing to show shape for."); return Ok(()); };
-    let Some(obj) = first.as_object() else { safe_println!("First track is not a JSON object: {}", value_type(first)); return Ok(()); };
-    safe_println!("First track shape:");
-    let mut keys: Vec<&String> = obj.keys().collect();
-    keys.sort();
-    for key in keys { let value = &obj[key]; safe_println!("{}: {}", key, describe_shape(value)); }
-    Ok(())
-}
-
 struct UrlShape { empty: bool, contains_m3u8: bool, host: String, last_path_ext: String, query_params: String, length: usize }
 struct StreamShape { type_value: String, url_empty: bool, contains_m3u8: bool, fallback_url_empty: bool, fallback_equals_url: bool }
 struct StreamsShape { count: usize, items: Vec<StreamShape> }
@@ -701,22 +405,6 @@ fn audio_streams_shape(value: Option<&Value>) -> StreamsShape {
     StreamsShape { count: arr.len(), items }
 }
 
-fn describe_shape(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(_) => "bool".to_string(),
-        Value::Number(n) => if n.is_i64() { "number(i64)".to_string() } else if n.is_u64() { "number(u64)".to_string() } else { "number(f64)".to_string() },
-        Value::String(_) => "string".to_string(),
-        Value::Array(arr) => if let Some(first) = arr.first() { format!("array<{}>", describe_shape(first)) } else { "array<empty>".to_string() },
-        Value::Object(obj) => {
-            let mut keys: Vec<&String> = obj.keys().collect();
-            keys.sort();
-            let inner = keys.into_iter().map(|k| format!("{k}: {}", describe_shape(&obj[k]))).collect::<Vec<_>>().join(", ");
-            format!("object{{{inner}}}")
-        }
-    }
-}
-
 fn count_field(item: &Value) -> String {
     match item.get("count") { Some(Value::Number(n)) => n.to_string(), Some(_) => "<invalid>".to_string(), None => "<missing>".to_string() }
 }
@@ -743,9 +431,6 @@ fn url_kind(item: &Value) -> &'static str {
     let Some(url) = url_value.as_str() else { return "no url"; };
     let lower = url.to_ascii_lowercase();
     if lower.is_empty() { "no url" } else if lower.contains(".m3u8") { "m3u8" } else if lower.contains(".mp3") { "mp3/other" } else { "mp3/other" }
-}
-fn value_type(value: &Value) -> &'static str {
-    match value { Value::Null => "null", Value::Bool(_) => "bool", Value::Number(_) => "number", Value::String(_) => "string", Value::Array(_) => "array", Value::Object(_) => "object" }
 }
 
 fn parse_play_seconds(raw: &str) -> Result<u64> {

@@ -28,7 +28,6 @@ pub enum PlayerEvent {
     Resumed { artist: String, title: String, position_secs: u64, duration_secs: Option<u64> },
     Stopped,
     Ended { generation: u64 },
-    Position { position_secs: u64, duration_secs: Option<u64> },
     Volume(f32),
     Error(String),
 }
@@ -113,7 +112,7 @@ fn worker_loop(
                                 Ok(d) => d,
                                 Err(_) => {
                                     s.seeking.store(false, Ordering::Relaxed);
-                                    send_evt(&evt_tx, &ctx, PlayerEvent::Error("request failed (decode)".to_string()));
+                                    send_evt(&evt_tx, &ctx, PlayerEvent::Error("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string()));
                                     continue;
                                 }
                             };
@@ -214,7 +213,7 @@ fn play_track(
     let bytes = download_track_bytes(client, &url)?;
     let duration_secs = decode_duration(&bytes).map(|d| d.as_secs()).or(track.duration_secs);
 
-    let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("request failed (decode)"))?;
+    let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
     stream.log_on_drop(false);
     let player = Arc::new(Player::connect_new(&stream.mixer()));
     player.set_volume(volume);
@@ -309,7 +308,7 @@ fn make_decoder(bytes: Arc<Vec<u8>>) -> Result<Decoder<Cursor<SharedBytes>>> {
         .with_byte_len(len)
         .with_seekable(true)
         .build()
-        .map_err(|_| anyhow!("request failed (decode)"))
+        .map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))
 }
 
 fn decode_duration(bytes: &[u8]) -> Option<Duration> {
@@ -322,7 +321,7 @@ fn select_play_url(client: &reqwest::blocking::Client, track: &Track) -> Result<
         .url
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("no playable mp3"))?;
+        .ok_or_else(|| anyhow!("\u{041d}\u{0435}\u{0442} \u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}\u{0433}\u{043e} mp3"))?;
     match probe_first_bytes(client, main_url) {
         Ok(bytes) if is_mp3_bytes(&bytes) => Ok(main_url.to_string()),
         Ok(_) | Err(_) => {
@@ -330,7 +329,7 @@ fn select_play_url(client: &reqwest::blocking::Client, track: &Track) -> Result<
                 .audio_streams
                 .as_ref()
                 .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("no playable mp3"))?;
+                .ok_or_else(|| anyhow!("\u{041d}\u{0435}\u{0442} \u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}\u{0433}\u{043e} mp3"))?;
             for stream in streams {
                 let stype = stream.get("type").and_then(Value::as_str).unwrap_or("");
                 if stype != "mp3" {
@@ -344,7 +343,7 @@ fn select_play_url(client: &reqwest::blocking::Client, track: &Track) -> Result<
                     return Ok(url.to_string());
                 }
             }
-            Err(anyhow!("no playable mp3"))
+            Err(anyhow!("\u{041d}\u{0435}\u{0442} \u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}\u{0433}\u{043e} mp3"))
         }
     }
 }
@@ -357,7 +356,7 @@ fn probe_first_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Ve
         .map_err(map_reqwest_error)?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(anyhow!("request failed (status {})", status.as_u16()));
+        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()));
     }
     let mut buf = [0u8; 16];
     let mut read_total = 0usize;
@@ -367,7 +366,7 @@ fn probe_first_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Ve
         }
         let n = resp
             .read(&mut buf[read_total..])
-            .map_err(|_| anyhow!("request failed (decode)"))?;
+            .map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
         if n == 0 {
             break;
         }
@@ -387,12 +386,12 @@ fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result
     let mut resp = client.get(url).send().map_err(map_reqwest_error)?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(anyhow!("request failed (status {})", status.as_u16()));
+        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()));
     }
     let content_length = resp.content_length();
     if let Some(len) = content_length {
         if len as usize > PLAY_MAX_BYTES {
-            return Err(anyhow!("request failed (decode)"));
+            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
         }
     }
     let mut buf: Vec<u8> = Vec::with_capacity(
@@ -404,18 +403,18 @@ fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result
     loop {
         let n = resp
             .read(&mut chunk)
-            .map_err(|_| anyhow!("request failed (decode)"))?;
+            .map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
         if n == 0 {
             break;
         }
         if buf.len().saturating_add(n) > PLAY_MAX_BYTES {
-            return Err(anyhow!("request failed (decode)"));
+            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
         }
         buf.extend_from_slice(&chunk[..n]);
     }
     if let Some(len) = content_length {
         if buf.len() != len as usize {
-            return Err(anyhow!("request failed (decode)"));
+            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
         }
     }
     Ok(buf)

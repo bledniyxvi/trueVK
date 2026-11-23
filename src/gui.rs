@@ -11,6 +11,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
 const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
+const MEDIA_KEYS_UNAVAILABLE_PREFIX: &str = "\u{041c}\u{0435}\u{0434}\u{0438}\u{0430}-\u{043a}\u{043b}\u{0430}\u{0432}\u{0438}\u{0448}\u{0438} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{044b}: ";
+const MEDIA_KEYS_BUSY_PREFIX: &str = "\u{041c}\u{0435}\u{0434}\u{0438}\u{0430}-\u{043a}\u{043b}\u{0430}\u{0432}\u{0438}\u{0448}\u{0438} \u{0437}\u{0430}\u{043d}\u{044f}\u{0442}\u{044b}: ";
+const TRAY_UNAVAILABLE_PREFIX: &str = "\u{0422}\u{0440}\u{0435}\u{0439} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{0435}\u{043d}: ";
+const SAVED_TRACK_UNAVAILABLE_TEXT: &str = "\u{0421}\u{043e}\u{0445}\u{0440}\u{0430}\u{043d}\u{0451}\u{043d}\u{043d}\u{044b}\u{0439} \u{0442}\u{0440}\u{0435}\u{043a} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{0435}\u{043d}";
+const TOKEN_EXPIRED_TEXT: &str = "\u{0422}\u{043e}\u{043a}\u{0435}\u{043d} \u{0438}\u{0441}\u{0442}\u{0451}\u{043a}, \u{0432}\u{043e}\u{0439}\u{0434}\u{0438}\u{0442}\u{0435} \u{0441}\u{043d}\u{043e}\u{0432}\u{0430}";
+const DOWNLOADING_PREFIX: &str = "\u{0417}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043a}\u{0430}: ";
+const TOKEN_NOT_FOUND_TEXT: &str = "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} VK API: \u{0442}\u{043e}\u{043a}\u{0435}\u{043d} \u{043d}\u{0435} \u{043d}\u{0430}\u{0439}\u{0434}\u{0435}\u{043d}";
+const BROWSER_OPEN_ERROR_TEXT: &str = "\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{043e}\u{0442}\u{043a}\u{0440}\u{044b}\u{0442}\u{044c} \u{0431}\u{0440}\u{0430}\u{0443}\u{0437}\u{0435}\u{0440}";
+const HOTKEY_NAME_PLAY_PAUSE: &str = "\u{041f}\u{0443}\u{0441}\u{043a}/\u{043f}\u{0430}\u{0443}\u{0437}\u{0430}";
+const HOTKEY_NAME_STOP: &str = "\u{0421}\u{0442}\u{043e}\u{043f}";
+const HOTKEY_NAME_NEXT: &str = "\u{0414}\u{0430}\u{043b}\u{0435}\u{0435}";
+const HOTKEY_NAME_PREV: &str = "\u{041d}\u{0430}\u{0437}\u{0430}\u{0434}";
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
 const TRACK_ROW_HEIGHT: f32 = 44.0;
@@ -333,10 +345,14 @@ fn draw_skeleton_rows(ui: &mut egui::Ui, rect: egui::Rect, row_h: f32) {
 }
 
 fn status_is_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
     text.contains(FILTER_AUTOLOAD_ERROR_TEXT)
         || text.contains(PLAYER_CHANNEL_CLOSED_TEXT)
-        || text.contains("error")
-        || text.contains("unavailable")
+        || lower.contains("\u{043e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430}")
+        || lower.contains("\u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}")
+        || lower.contains("\u{0438}\u{0441}\u{0442}\u{0451}\u{043a}")
+        || lower.contains("\u{043d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c}")
+        || lower.contains("\u{043d}\u{0435}\u{0442} \u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}\u{0433}\u{043e}")
 }
 
 fn draw_magnifier(painter: &egui::Painter, center: egui::Pos2) {
@@ -1531,7 +1547,7 @@ fn set_queue_for_my_music(&mut self) {
         let manager = match GlobalHotKeyManager::new() {
             Ok(m) => m,
             Err(e) => {
-                self.hotkey_status = format!("media keys unavailable: {}", api::sanitize_output(&format!("{e:#}")));
+                self.hotkey_status = format!("{}{}", MEDIA_KEYS_UNAVAILABLE_PREFIX, api::sanitize_output(&format!("{e:#}")));
                 return;
             }
         };
@@ -1549,16 +1565,16 @@ fn set_queue_for_my_music(&mut self) {
                 Ok(()) => { map.insert(id, kind); }
                 Err(_) => {
                     failed.push(match kind {
-                        MediaHotkey::PlayPause => "PlayPause",
-                        MediaHotkey::Stop => "Stop",
-                        MediaHotkey::Next => "Next",
-                        MediaHotkey::Prev => "Prev",
+                        MediaHotkey::PlayPause => HOTKEY_NAME_PLAY_PAUSE,
+                        MediaHotkey::Stop => HOTKEY_NAME_STOP,
+                        MediaHotkey::Next => HOTKEY_NAME_NEXT,
+                        MediaHotkey::Prev => HOTKEY_NAME_PREV,
                     });
                 }
             }
         }
         if !failed.is_empty() {
-            self.hotkey_status = format!("media keys busy: {}", failed.join(", "));
+            self.hotkey_status = format!("{}{}", MEDIA_KEYS_BUSY_PREFIX, failed.join(", "));
         }
         let tx = self.ui_evt_tx.clone();
         let ctx = self.egui_ctx.clone();
@@ -1601,7 +1617,7 @@ fn set_queue_for_my_music(&mut self) {
     fn build_tray(&mut self) {
         let icon = match make_tray_icon() {
             Ok(i) => i,
-            Err(e) => { self.hotkey_status = format!("tray unavailable: {}", api::sanitize_output(&format!("{e:#}"))); return; }
+            Err(e) => { self.hotkey_status = format!("{}{}", TRAY_UNAVAILABLE_PREFIX, api::sanitize_output(&format!("{e:#}"))); return; }
         };
         let show = MenuItem::new("\u{041F}\u{043E}\u{043A}\u{0430}\u{0437}\u{0430}\u{0442}\u{044C}", true, None);
         let playpause = MenuItem::new("\u{041F}\u{0430}\u{0443}\u{0437}\u{0430} / \u{0418}\u{0433}\u{0440}\u{0430}\u{0442}\u{044C}", true, None);
@@ -1623,7 +1639,7 @@ fn set_queue_for_my_music(&mut self) {
             .with_menu_on_left_click(false)
             .build() {
             Ok(t) => t,
-            Err(e) => { self.hotkey_status = format!("tray unavailable: {}", api::sanitize_output(&format!("{e:#}"))); return; }
+            Err(e) => { self.hotkey_status = format!("{}{}", TRAY_UNAVAILABLE_PREFIX, api::sanitize_output(&format!("{e:#}"))); return; }
         };
 
         let tx = self.ui_evt_tx.clone();
@@ -1682,7 +1698,7 @@ fn set_queue_for_my_music(&mut self) {
             })();
             match res {
                 Ok(track) => { let _ = tx.send(UiEvent::RestoredTrackResolved { track }); }
-                Err(_) => { let _ = tx.send(UiEvent::RestoredTrackUnavailable("saved track unavailable".to_string())); }
+                Err(_) => { let _ = tx.send(UiEvent::RestoredTrackUnavailable(SAVED_TRACK_UNAVAILABLE_TEXT.to_string())); }
             }
             ctx.request_repaint();
         });
@@ -1935,7 +1951,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.rec_waiting_next = false;
                     crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
-                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                        self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else {
                         self.rec_status = msg;
                     }
@@ -1968,7 +1984,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.play_next();
                     } else if id == self.tray_menu_quit_id {
                         self.quit_requested = true;
-                        let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                        let _ = self.cmd_tx.send(PlayerCmd::Shutdown);
                         self._tray_icon.take();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -2001,7 +2017,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 UiEvent::AddError { track_id, msg } => {
                     crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
-                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                        self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else {
                         self.add_states.insert(track_id, AddState::Error(msg.clone()));
                         self.status = msg;
@@ -2016,7 +2032,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.delete_states.insert(track_id, DeleteState::Idle);
                     crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
-                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                        self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else {
                         self.status = msg;
                     }
@@ -2036,7 +2052,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.loading_search = false;
                     self.filter_autoload_stopped = true;
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
-                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                        self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else if tracks_error || !self.my_filter.trim().is_empty() {
                         self.status = FILTER_AUTOLOAD_ERROR_TEXT.to_string();
                         if self.active_tab == Tab::MyMusic { self.my_status = FILTER_AUTOLOAD_ERROR_TEXT.to_string(); }
@@ -2075,7 +2091,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             match evt {
                 PlayerEvent::Downloading { artist, title, generation } => {
                     self.current_gen = generation;
-                    self.status = format!("Downloading: {artist} - {title}");
+                    self.status = format!("{DOWNLOADING_PREFIX}{artist} - {title}");
                 }
                                 PlayerEvent::Playing { artist, title, duration_secs, generation } => {
                     self.current_gen = generation;
@@ -2119,13 +2135,6 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.play_next_autoplay();
                     }
                 }
-                PlayerEvent::Position { position_secs, duration_secs } => {
-                    if let Some(np) = self.now_playing.as_mut() {
-                        np.base_secs = position_secs as f64;
-                        np.started_at = if np.paused { None } else { Some(Instant::now()) };
-                        if duration_secs.is_some() { np.duration_secs = duration_secs; }
-                    }
-                }
                 PlayerEvent::Volume(vol) => { self.volume = vol.clamp(0.0, 1.0); }
                 PlayerEvent::Error(msg) => {
                     self.pending_play_track_id = None;
@@ -2133,7 +2142,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     self.sync_tray_tooltip(theme::APP_NAME);
                     crate::log_status_error(&msg);
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
-                        self.logout_to_login(Some("token expired, log in again".to_string()));
+                        self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else {
                         self.status = msg;
                     }
@@ -2161,7 +2170,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             self.credentials_saved = false;
             self.request_tracks_load();
         } else {
-            self.status = "VK API error: access_token not found".to_string();
+            self.status = TOKEN_NOT_FOUND_TEXT.to_string();
         }
     }
 
@@ -2225,7 +2234,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                                         .spawn()
                                         .is_err()
                                     {
-                                        self.status = "browser open error".to_string();
+                                        self.status = BROWSER_OPEN_ERROR_TEXT.to_string();
                                     }
                                 }
                                 ui.add_space(button_gap);
@@ -2412,7 +2421,11 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 false
             }
             AddState::Done => {
-                ui.add(egui::Label::new(egui::RichText::new("ok").font(theme::mono_font(12.0)).color(theme::ACCENT)).selectable(false));
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::hover());
+                let c = rect.center();
+                let stroke = egui::Stroke::new(1.5, theme::ACCENT);
+                ui.painter().line_segment([c + egui::vec2(-5.0, 0.0), c + egui::vec2(-1.5, 3.5)], stroke);
+                ui.painter().line_segment([c + egui::vec2(-1.5, 3.5), c + egui::vec2(5.0, -3.5)], stroke);
                 false
             }
             AddState::Idle => {

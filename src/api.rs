@@ -40,7 +40,7 @@ pub struct VkError {
 pub fn is_auth_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         let msg = cause.to_string();
-        msg.contains("VK API error 5:") || msg.contains("VK API error 15:")
+        msg.contains("VK API 5:") || msg.contains("VK API 15:")
     })
 }
 
@@ -74,20 +74,8 @@ impl Track {
         }
     }
 
-    pub fn display_line(&self) -> String {
-        let dur = self
-            .duration_secs
-            .map(format_mm_ss)
-            .unwrap_or_else(|| "--:--".to_string());
-        format!("{} - {}  {}", self.artist, self.title, dur)
-    }
-
     pub fn is_playable(&self) -> bool {
         self.url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
-    }
-
-    pub fn identity(&self) -> (i64, i64) {
-        (self.owner_id, self.id)
     }
 }
 
@@ -122,7 +110,7 @@ pub fn build_client(user_agent: &str) -> Result<reqwest::blocking::Client> {
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .user_agent(user_agent)
         .build()
-        .context("failed to build HTTP client")
+        .context("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{0441}\u{043e}\u{0437}\u{0434}\u{0430}\u{0442}\u{044c} HTTP-\u{043a}\u{043b}\u{0438}\u{0435}\u{043d}\u{0442}")
 }
 
 pub fn vk_call<T: for<'de> Deserialize<'de>>(
@@ -136,48 +124,48 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
     query.push(("v", API_VERSION));
     query.extend_from_slice(params);
     let url = reqwest::Url::parse_with_params(&format!("{API_HOST}{method}"), &query)
-        .context("failed to build VK API URL")?;
+        .context("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{0441}\u{043e}\u{0431}\u{0440}\u{0430}\u{0442}\u{044c} URL VK API")?;
     let response = client
         .get(url)
         .send()
         .map_err(map_reqwest_error)
-        .with_context(|| format!("request failed: {method}"))?;
+        .with_context(|| format!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430}: {method}"))?;
     let status = response.status();
     let body: Value = response
         .json()
         .map_err(map_reqwest_error)
-        .with_context(|| format!("failed to parse JSON: {method}"))?;
+        .with_context(|| format!("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{0440}\u{0430}\u{0437}\u{043e}\u{0431}\u{0440}\u{0430}\u{0442}\u{044c} JSON: {method}"))?;
     if !status.is_success() {
-        return Err(anyhow!("request failed (status {})", status.as_u16()));
+        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()));
     }
     let parsed: VkResponse<T> = serde_json::from_value(body)
-        .with_context(|| format!("failed to decode response: {method}"))?;
+        .with_context(|| format!("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{043f}\u{0440}\u{043e}\u{0447}\u{0438}\u{0442}\u{0430}\u{0442}\u{044c} \u{043e}\u{0442}\u{0432}\u{0435}\u{0442}: {method}"))?;
     if let Some(err) = parsed.error {
         let code = err
             .error_code
             .map(|c| c.to_string())
             .unwrap_or_else(|| "<missing>".to_string());
         let msg = err.error_msg.unwrap_or_else(|| "<missing>".to_string());
-        return Err(anyhow!("VK API error {}: {}", code, sanitize_output(&msg)));
+        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} VK API {}: {}", code, sanitize_output(&msg)));
     }
     parsed
         .response
-        .ok_or_else(|| anyhow!("VK API response missing 'response' field for {method}"))
+        .ok_or_else(|| anyhow!("\u{0412} \u{043e}\u{0442}\u{0432}\u{0435}\u{0442}\u{0435} VK API \u{043d}\u{0435}\u{0442} \u{043f}\u{043e}\u{043b}\u{044f} response: {method}"))
 }
 
 pub fn map_reqwest_error(err: reqwest::Error) -> anyhow::Error {
     let err = err.without_url();
     if let Some(status) = err.status() {
-        anyhow!("request failed (status {})", status.as_u16())
+        anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16())
 
     } else if err.is_timeout() {
-        anyhow!("request failed (timeout)")
+        anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0442}\u{0430}\u{0439}\u{043c}\u{0430}\u{0443}\u{0442})")
     } else if err.is_connect() {
-        anyhow!("request failed (connect)")
+        anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043d}\u{0435}\u{0442} \u{0441}\u{043e}\u{0435}\u{0434}\u{0438}\u{043d}\u{0435}\u{043d}\u{0438}\u{044f})")
     } else if err.is_decode() {
-        anyhow!("request failed (decode)")
+        anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})")
     } else {
-        anyhow!("request failed")
+        anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430}")
     }
 }
 
