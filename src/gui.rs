@@ -835,6 +835,9 @@ struct GuiAppImpl {
     player_channel_closed: bool,
     last_tray_tooltip: String,
     my_filter: String,
+    tracks_version: u64,
+    my_filter_cache: Vec<usize>,
+    my_filter_cache_key: (u64, String),
     repeat_mode: RepeatMode,
     shuffle: bool,
     shuffle_played: HashSet<TrackId>,
@@ -961,6 +964,9 @@ impl GuiAppImpl {
             player_channel_closed: false,
             last_tray_tooltip: String::new(),
             my_filter: String::new(),
+            tracks_version: 0,
+            my_filter_cache: Vec::new(),
+            my_filter_cache_key: (u64::MAX, String::new()),
             repeat_mode: RepeatMode::from_str(&storage::load_repeat()),
             shuffle,
             shuffle_played: HashSet::new(),
@@ -1241,7 +1247,7 @@ impl GuiAppImpl {
         self.credentials_saved = false;
         self.my_user_id = None;
 
-        self.tracks.clear(); self.tracks_count = None; self.loading_tracks = false; self.next_offset = 0; self.my_status.clear();
+        self.tracks.clear(); self.tracks_version += 1; self.tracks_count = None; self.loading_tracks = false; self.next_offset = 0; self.my_status.clear();
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
         self.selected_playlist = None; self.playlist_tracks.clear(); self.playlist_tracks_count = None; self.loading_playlist_tracks = false; self.playlist_tracks_offset = 0; self.playlist_status.clear();
         self.search_query.clear(); self.search_input.clear(); self.search_tracks.clear(); self.search_count = None; self.loading_search = false; self.search_offset = 0; self.search_status.clear(); self.search_request_id = 0;
@@ -1308,7 +1314,8 @@ fn set_queue_for_my_music(&mut self) {
                 if self.my_filter.trim().is_empty() {
                     self.set_queue_for_my_music();
                 } else {
-                    let filtered: Vec<Track> = self.my_music_filtered().into_iter().map(|(_, t)| t).collect();
+                    self.refresh_my_filter_cache();
+                    let filtered: Vec<Track> = self.my_filter_cache.iter().filter_map(|&i| self.tracks.get(i).cloned()).collect();
                     self.queue = filtered;
                     self.queue_source = QueueSource::MyMusic;
                     self.queue_playlist = None;
@@ -1605,13 +1612,15 @@ fn set_queue_for_my_music(&mut self) {
         s
     }
 
-    fn my_music_filtered(&self) -> Vec<(usize, Track)> {
+    fn refresh_my_filter_cache(&mut self) {
         let q = self.my_filter.trim().to_lowercase();
-        self.tracks.iter().enumerate().filter(|(_, t)| {
+        if self.my_filter_cache_key == (self.tracks_version, q.clone()) { return; }
+        self.my_filter_cache = self.tracks.iter().enumerate().filter(|(_, t)| {
             if q.is_empty() { return true; }
             let hay = format!("{} - {}", t.artist, t.title).to_lowercase();
             hay.contains(&q)
-        }).map(|(i, t)| (i, t.clone())).collect()
+        }).map(|(i, _)| i).collect();
+        self.my_filter_cache_key = (self.tracks_version, q);
     }
 
     fn build_tray(&mut self) {
@@ -1767,6 +1776,7 @@ fn set_queue_for_my_music(&mut self) {
     }
     fn refresh_my_music_after_add(&mut self) {
         self.tracks.clear();
+        self.tracks_version += 1;
         self.tracks_count = None;
         self.next_offset = 0;
         self.loading_tracks = false;
@@ -1813,6 +1823,7 @@ fn set_queue_for_my_music(&mut self) {
     }
 fn remove_track_locally(&mut self, track_id: TrackId) {
         self.tracks.retain(|t| TrackId::from_track(t) != track_id);
+        self.tracks_version += 1;
         if let Some(c) = self.tracks_count.as_mut() {
             *c = c.saturating_sub(1);
         }
@@ -1868,6 +1879,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         let no_progress = items.is_empty();
                         self.next_offset += items.len();
                         self.tracks.extend(items);
+                        self.tracks_version += 1;
                         if let Some(c) = count { self.tracks_count = Some(c); }
                         self.loading_tracks = false;
                         self.my_status.clear();
@@ -2149,7 +2161,8 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
             }
         }
-        if self.now_playing.as_ref().map(|np| !np.paused).unwrap_or(false) {
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if !self.window_hidden && !minimized && self.now_playing.as_ref().map(|np| !np.paused).unwrap_or(false) {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -2163,6 +2176,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             self.login_input.clear();
             self.status.clear();
             self.tracks.clear();
+            self.tracks_version += 1;
             self.tracks_count = None;
             self.next_offset = 0;
             self.filter_autoload_stopped = false;
@@ -2976,8 +2990,8 @@ impl eframe::App for GuiAppImpl {
                         self.sync_shuffle_queue();
                     }
                     let filter_active = !self.my_filter.trim().is_empty();
-                    let filtered = self.my_music_filtered();
-                    let total = if filter_active { filtered.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
+                    self.refresh_my_filter_cache();
+                    let total = if filter_active { self.my_filter_cache.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
                     let count_text = format!("{}{}", total, TRACKS_SUFFIX);
                     let count_w = measure_label_width(ui, &count_text, theme::mono_font(12.0));
                     let count_x = ui.available_rect_before_wrap().max.x - 12.0 - count_w;
@@ -2991,7 +3005,7 @@ impl eframe::App for GuiAppImpl {
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     let list_rect = ui.available_rect_before_wrap();
                     let first_page = self.tracks.is_empty() && (self.loading_tracks || self.tracks_count.is_none());
-                    let filter_no_matches = filter_active && filtered.is_empty();
+                    let filter_no_matches = filter_active && self.my_filter_cache.is_empty();
                     let library_empty = !filter_active && self.tracks.is_empty();
                     if filter_no_matches && !self.loading_tracks && !my_status_error {
                         draw_empty_state(ui, list_rect, EMPTY_FILTER_MAIN, Some(EMPTY_FILTER_SUB));
@@ -3004,7 +3018,7 @@ impl eframe::App for GuiAppImpl {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, total, |ui, range| {
                             let width = ui.available_width();
                             for row in range.clone() {
-                                let Some((i, track)) = (if filter_active { filtered.get(row).cloned() } else { self.tracks.get(row).cloned().map(|t| (row, t)) }) else {
+                                let Some((i, track)) = (if filter_active { self.my_filter_cache.get(row).and_then(|&idx| self.tracks.get(idx).cloned().map(|t| (idx, t))) } else { self.tracks.get(row).cloned().map(|t| (row, t)) }) else {
                                     if !filter_active && !self.loading_tracks { self.request_tracks_load(); }
                                     continue;
                                 };
