@@ -125,10 +125,7 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
     query.extend_from_slice(params);
     let url = reqwest::Url::parse_with_params(&format!("{API_HOST}{method}"), &query)
         .context("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{0441}\u{043e}\u{0431}\u{0440}\u{0430}\u{0442}\u{044c} URL VK API")?;
-    let response = client
-        .get(url)
-        .send()
-        .map_err(map_reqwest_error)
+    let response = send_with_retry(|| client.get(url.clone()))
         .with_context(|| format!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430}: {method}"))?;
     let status = response.status();
     let body: Value = response
@@ -151,6 +148,22 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
     parsed
         .response
         .ok_or_else(|| anyhow!("\u{0412} \u{043e}\u{0442}\u{0432}\u{0435}\u{0442}\u{0435} VK API \u{043d}\u{0435}\u{0442} \u{043f}\u{043e}\u{043b}\u{044f} response: {method}"))
+}
+
+pub fn send_with_retry(build: impl Fn() -> reqwest::blocking::RequestBuilder) -> Result<reqwest::blocking::Response> {
+    let mut attempt: u64 = 0;
+    loop {
+        match build().send() {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                if attempt >= 2 || !(e.is_timeout() || e.is_connect()) {
+                    return Err(map_reqwest_error(e));
+                }
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(400 * attempt));
+            }
+        }
+    }
 }
 
 pub fn map_reqwest_error(err: reqwest::Error) -> anyhow::Error {

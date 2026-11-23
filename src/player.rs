@@ -210,14 +210,13 @@ fn play_track(
     current_generation: Arc<AtomicU64>,
 ) -> Result<PlayingState> {
     let url = select_play_url(client, &track)?;
-    let bytes = download_track_bytes(client, &url)?;
-    let duration_secs = decode_duration(&bytes).map(|d| d.as_secs()).or(track.duration_secs);
+    let bytes = Arc::new(download_track_bytes(client, &url)?);
+    let duration_secs = decode_duration(Arc::clone(&bytes)).map(|d| d.as_secs()).or(track.duration_secs);
 
     let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
     stream.log_on_drop(false);
     let player = Arc::new(Player::connect_new(&stream.mixer()));
     player.set_volume(volume);
-    let bytes = Arc::new(bytes);
     let decoder = make_decoder(Arc::clone(&bytes))?;
     player.append(decoder);
 
@@ -311,8 +310,8 @@ fn make_decoder(bytes: Arc<Vec<u8>>) -> Result<Decoder<Cursor<SharedBytes>>> {
         .map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))
 }
 
-fn decode_duration(bytes: &[u8]) -> Option<Duration> {
-    let decoder = Decoder::try_from(Cursor::new(bytes.to_vec())).ok()?;
+fn decode_duration(bytes: Arc<Vec<u8>>) -> Option<Duration> {
+    let decoder = make_decoder(bytes).ok()?;
     decoder.total_duration()
 }
 
@@ -349,11 +348,7 @@ fn select_play_url(client: &reqwest::blocking::Client, track: &Track) -> Result<
 }
 
 fn probe_first_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
-    let mut resp = client
-        .get(url)
-        .header(reqwest::header::RANGE, "bytes=0-15")
-        .send()
-        .map_err(map_reqwest_error)?;
+    let mut resp = crate::api::send_with_retry(|| client.get(url).header(reqwest::header::RANGE, "bytes=0-15"))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()));
@@ -382,40 +377,75 @@ fn is_mp3_bytes(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0xFF && matches!(bytes[1], 0xE2..=0xFF)
 }
 
+struct DownloadFail {
+    retryable: bool,
+    msg: String,
+}
+
 fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
-    let mut resp = client.get(url).send().map_err(map_reqwest_error)?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()));
-    }
-    let content_length = resp.content_length();
-    if let Some(len) = content_length {
-        if len as usize > PLAY_MAX_BYTES {
-            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
+    let mut attempt: u64 = 0;
+    loop {
+        match download_once(client, url) {
+            Ok(bytes) => return Ok(bytes),
+            Err(f) => {
+                if f.retryable && attempt < 2 {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(400 * attempt));
+                    continue;
+                }
+                return Err(anyhow!("{}", f.msg));
+            }
         }
     }
-    let mut buf: Vec<u8> = Vec::with_capacity(
-        content_length
-            .map(|l| (l as usize).min(PLAY_MAX_BYTES))
-            .unwrap_or(0),
-    );
+}
+
+fn download_once(client: &reqwest::blocking::Client, url: &str) -> std::result::Result<Vec<u8>, DownloadFail> {
+    let mut resp = client.get(url).send().map_err(|e| DownloadFail {
+        retryable: e.is_timeout() || e.is_connect(),
+        msg: format!("{:#}", map_reqwest_error(e)),
+    })?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(DownloadFail {
+            retryable: status.is_server_error(),
+            msg: format!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043a}\u{043e}\u{0434} {})", status.as_u16()),
+        });
+    }
+    let Some(len) = resp.content_length() else {
+        return Err(DownloadFail {
+            retryable: false,
+            msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{043d}\u{0435}\u{0442} \u{0440}\u{0430}\u{0437}\u{043c}\u{0435}\u{0440}\u{0430})".to_string(),
+        });
+    };
+    if len as usize > PLAY_MAX_BYTES {
+        return Err(DownloadFail {
+            retryable: false,
+            msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string(),
+        });
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
     let mut chunk = [0u8; 64 * 1024];
     loop {
-        let n = resp
-            .read(&mut chunk)
-            .map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
+        let n = resp.read(&mut chunk).map_err(|_| DownloadFail {
+            retryable: true,
+            msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string(),
+        })?;
         if n == 0 {
             break;
         }
         if buf.len().saturating_add(n) > PLAY_MAX_BYTES {
-            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
+            return Err(DownloadFail {
+                retryable: false,
+                msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string(),
+            });
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    if let Some(len) = content_length {
-        if buf.len() != len as usize {
-            return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"));
-        }
+    if buf.len() != len as usize {
+        return Err(DownloadFail {
+            retryable: true,
+            msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string(),
+        });
     }
     Ok(buf)
 }
