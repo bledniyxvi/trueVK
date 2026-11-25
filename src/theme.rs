@@ -128,14 +128,6 @@ pub fn font_definitions(cjk: Option<(Vec<u8>, u32)>) -> egui::FontDefinitions {
         egui::FontFamily::Name(Arc::from(MONO_FAMILY)),
         vec!["JetBrainsMono".to_owned()],
     );
-    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-        fonts.font_data.insert("SegoeUI".to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            if let Some(names) = fonts.families.get_mut(&family) {
-                insert_at(names, "SegoeUI", 1);
-            }
-        }
-    }
     if let Some((bytes, index)) = cjk {
         fonts.font_data.insert("CJK".to_owned(), Arc::new(egui::FontData::from_blob(Arc::new(bytes), index)));
         for family in [

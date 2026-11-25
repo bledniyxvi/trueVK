@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use serde_json::Value;
 use std::io::{Cursor, Read};
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, Sender},
@@ -18,6 +19,7 @@ pub enum PlayerCmd {
     Stop,
     SetVolume(f32),
     Seek(u64),
+    SaveCurrent { path: PathBuf },
     Shutdown,
 }
 
@@ -36,6 +38,8 @@ pub enum PlayerEvent {
     Stopped,
     Ended { generation: u64 },
     Volume(f32),
+    Saved { path: String },
+    SaveError(String),
     Error(String),
 }
 
@@ -45,6 +49,10 @@ enum WorkerMsg {
         generation: u64,
         track: Track,
         result: std::result::Result<Arc<Vec<u8>>, String>,
+    },
+    OutputStalled {
+        generation: u64,
+        position_secs: u64,
     },
 }
 
@@ -85,6 +93,8 @@ struct PlayingState {
     paused: bool,
     stop_flag: Arc<AtomicBool>,
     seeking: Arc<AtomicBool>,
+    paused_flag: Arc<AtomicBool>,
+    wake_tx: Sender<()>,
     monitor: Option<thread::JoinHandle<()>>,
     bytes: Arc<Vec<u8>>,
 }
@@ -92,6 +102,7 @@ struct PlayingState {
 impl PlayingState {
     fn stop(mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
+        let _ = self.wake_tx.send(());
         self.player.stop();
         if let Some(h) = self.monitor.take() {
             let _ = h.join();
@@ -133,7 +144,7 @@ fn worker_loop(
                 }
                 match result {
                     Ok(bytes) => {
-                        match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
+                        match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation), &msg_tx) {
                             Ok(s) => state = Some(s),
                             Err(e) => send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}")))),
                         }
@@ -143,6 +154,38 @@ fn worker_loop(
                             send_evt(&evt_tx, &ctx, PlayerEvent::Error(msg));
                         }
                     }
+                }
+                continue;
+            }
+            WorkerMsg::OutputStalled { generation, position_secs } => {
+                if current_generation.load(Ordering::Relaxed) != generation {
+                    continue;
+                }
+                let Some(s) = state.take() else { continue; };
+                if s.paused {
+                    state = Some(s);
+                    continue;
+                }
+                let bytes = Arc::clone(&s.bytes);
+                let artist = s.artist.clone();
+                let title = s.title.clone();
+                let duration_secs = s.duration_secs;
+                s.stop();
+                match recover_output(
+                    bytes,
+                    artist,
+                    title,
+                    duration_secs,
+                    position_secs,
+                    &evt_tx,
+                    &ctx,
+                    volume,
+                    generation,
+                    Arc::clone(&current_generation),
+                    &msg_tx,
+                ) {
+                    Ok(s) => state = Some(s),
+                    Err(e) => send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}")))),
                 }
                 continue;
             }
@@ -179,9 +222,24 @@ fn worker_loop(
             PlayerCmd::SetVolume(vol) => {
                 volume = vol.clamp(0.0, 1.0);
                 if let Some(s) = state.as_ref() {
-                    s.player.set_volume(volume);
+                    s.player.set_volume(effective_volume(volume));
                 }
                 send_evt(&evt_tx, &ctx, PlayerEvent::Volume(volume));
+            }
+            PlayerCmd::SaveCurrent { path } => {
+                if let Some(s) = state.as_ref() {
+                    let bytes = Arc::clone(&s.bytes);
+                    let evt_tx = evt_tx.clone();
+                    let ctx = ctx.clone();
+                    thread::spawn(move || {
+                        match std::fs::write(&path, bytes.as_ref()) {
+                            Ok(()) => send_evt(&evt_tx, &ctx, PlayerEvent::Saved { path: path.display().to_string() }),
+                            Err(e) => send_evt(&evt_tx, &ctx, PlayerEvent::SaveError(format!("\u{041d}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{043e}\u{0441}\u{044c} \u{0441}\u{043e}\u{0445}\u{0440}\u{0430}\u{043d}\u{0438}\u{0442}\u{044c} MP3: {e}"))),
+                        }
+                    });
+                } else {
+                    send_evt(&evt_tx, &ctx, PlayerEvent::SaveError("\u{041d}\u{0435}\u{0442} \u{0430}\u{043a}\u{0442}\u{0438}\u{0432}\u{043d}\u{043e}\u{0433}\u{043e} \u{0442}\u{0440}\u{0435}\u{043a}\u{0430}".to_string()));
+                }
             }
             PlayerCmd::Seek(sec) => {
                 if let Some(s) = state.as_mut() {
@@ -211,6 +269,7 @@ fn worker_loop(
                         }
                     };
                     s.seeking.store(false, Ordering::Relaxed);
+                    let _ = s.wake_tx.send(());
                     if s.paused {
                         send_evt(&evt_tx, &ctx, PlayerEvent::Paused { artist: s.artist.clone(), title: s.title.clone(), position_secs: pos.as_secs(), duration_secs: s.duration_secs });
                     } else {
@@ -223,8 +282,10 @@ fn worker_loop(
                     if s.paused {
                         s.player.set_volume(0.0);
                         s.player.play();
-                        fade_in(&s.player, volume);
+                        fade_in(&s.player, effective_volume(volume));
                         s.paused = false;
+                        s.paused_flag.store(false, Ordering::Relaxed);
+                        let _ = s.wake_tx.send(());
                         send_evt(
                             &evt_tx,
                             &ctx,
@@ -238,8 +299,10 @@ fn worker_loop(
                     } else {
                         fade_out(&s.player, s.player.volume());
                         s.player.pause();
-                        s.player.set_volume(volume);
+                        s.player.set_volume(effective_volume(volume));
                         s.paused = true;
+                        s.paused_flag.store(true, Ordering::Relaxed);
+                        let _ = s.wake_tx.send(());
                         send_evt(
                             &evt_tx,
                             &ctx,
@@ -286,7 +349,7 @@ fn worker_loop(
                     },
                 );
                 if let Some(bytes) = preloaded {
-                    match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
+                    match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation), &msg_tx) {
                         Ok(s) => state = Some(s),
                         Err(e) => {
                             send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
@@ -326,8 +389,12 @@ fn worker_loop(
     }
 }
 
+fn effective_volume(volume: f32) -> f32 {
+    volume.clamp(0.0, 1.0).powf(2.0)
+}
+
 fn fade_out(player: &Player, start: f32) {
-    let steps = 6u32;
+    let steps = 8u32;
     for i in 1..=steps {
         let t = i as f32 / steps as f32;
         player.set_volume(start * (1.0 - t));
@@ -337,13 +404,27 @@ fn fade_out(player: &Player, start: f32) {
 }
 
 fn fade_in(player: &Player, target: f32) {
-    let steps = 6u32;
+    let steps = 8u32;
     for i in 1..=steps {
         let t = i as f32 / steps as f32;
         player.set_volume(target * t);
         thread::sleep(Duration::from_millis(5));
     }
     player.set_volume(target);
+}
+
+fn open_default_sink() -> Result<rodio::MixerDeviceSink> {
+    for attempt in 0..3 {
+        match DeviceSinkBuilder::open_default_sink() {
+            Ok(mut stream) => {
+                stream.log_on_drop(false);
+                return Ok(stream);
+            }
+            Err(_) if attempt < 2 => thread::sleep(Duration::from_millis(300)),
+            Err(_) => break,
+        }
+    }
+    Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0430}\u{0443}\u{0434}\u{0438}\u{043e}\u{0443}\u{0441}\u{0442}\u{0440}\u{043e}\u{0439}\u{0441}\u{0442}\u{0432}\u{043e} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e})"))
 }
 
 fn play_bytes(
@@ -354,13 +435,13 @@ fn play_bytes(
     volume: f32,
     generation: u64,
     current_generation: Arc<AtomicU64>,
+    msg_tx: &Sender<WorkerMsg>,
 ) -> Result<PlayingState> {
     let duration_secs = decode_duration(Arc::clone(&bytes)).map(|d| d.as_secs()).or(track.duration_secs);
 
-    let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
-    stream.log_on_drop(false);
+    let stream = open_default_sink()?;
     let player = Arc::new(Player::connect_new(&stream.mixer()));
-    player.set_volume(volume);
+    player.set_volume(0.0);
     let decoder = make_decoder(Arc::clone(&bytes))?;
     player.append(decoder);
 
@@ -374,18 +455,24 @@ fn play_bytes(
             generation,
         },
     );
+    fade_in(&player, effective_volume(volume));
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let seeking = Arc::new(AtomicBool::new(false));
+    let paused_flag = Arc::new(AtomicBool::new(false));
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let monitor = spawn_monitor(
         Arc::clone(&player),
         Arc::clone(&stop_flag),
         Arc::clone(&seeking),
+        Arc::clone(&paused_flag),
+        wake_rx,
         generation,
         current_generation,
         evt_tx.clone(),
         ctx.clone(),
         duration_secs,
+        msg_tx.clone(),
     );
 
     Ok(PlayingState {
@@ -397,10 +484,80 @@ fn play_bytes(
         paused: false,
         stop_flag,
         seeking,
+        paused_flag,
+        wake_tx,
         monitor: Some(monitor),
         bytes,
     })
 }
+
+fn recover_output(
+    bytes: Arc<Vec<u8>>,
+    artist: String,
+    title: String,
+    duration_secs: Option<u64>,
+    position_secs: u64,
+    evt_tx: &Sender<PlayerEvent>,
+    ctx: &eframe::egui::Context,
+    volume: f32,
+    generation: u64,
+    current_generation: Arc<AtomicU64>,
+    msg_tx: &Sender<WorkerMsg>,
+) -> Result<PlayingState> {
+    let stream = open_default_sink()?;
+    let player = Arc::new(Player::connect_new(&stream.mixer()));
+    player.set_volume(0.0);
+    let decoder = make_decoder(Arc::clone(&bytes))?;
+    let source = decoder.skip_duration(Duration::from_secs(position_secs));
+    player.append(source);
+    player.play();
+    fade_in(&player, effective_volume(volume));
+
+    send_evt(
+        evt_tx,
+        ctx,
+        PlayerEvent::Resumed {
+            artist: artist.clone(),
+            title: title.clone(),
+            position_secs,
+            duration_secs,
+        },
+    );
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let seeking = Arc::new(AtomicBool::new(false));
+    let paused_flag = Arc::new(AtomicBool::new(false));
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let monitor = spawn_monitor(
+        Arc::clone(&player),
+        Arc::clone(&stop_flag),
+        Arc::clone(&seeking),
+        Arc::clone(&paused_flag),
+        wake_rx,
+        generation,
+        current_generation,
+        evt_tx.clone(),
+        ctx.clone(),
+        duration_secs,
+        msg_tx.clone(),
+    );
+
+    Ok(PlayingState {
+        _stream: stream,
+        player,
+        artist,
+        title,
+        duration_secs,
+        paused: false,
+        stop_flag,
+        seeking,
+        paused_flag,
+        wake_tx,
+        monitor: Some(monitor),
+        bytes,
+    })
+}
+
 
 fn spawn_preload_worker(
     client: reqwest::blocking::Client,
@@ -437,31 +594,72 @@ fn spawn_monitor(
     player: Arc<Player>,
     stop_flag: Arc<AtomicBool>,
     seeking: Arc<AtomicBool>,
+    paused_flag: Arc<AtomicBool>,
+    wake_rx: Receiver<()>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
     evt_tx: Sender<PlayerEvent>,
     ctx: eframe::egui::Context,
-    _duration_secs: Option<u64>,
+    duration_secs: Option<u64>,
+    msg_tx: Sender<WorkerMsg>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        let mut last_pos = player.get_pos();
+        let mut stall_ticks = 0u32;
         loop {
-            thread::sleep(Duration::from_millis(250));
-            if stop_flag.load(Ordering::Relaxed) {
+            if stop_flag.load(Ordering::Relaxed) || current_generation.load(Ordering::Relaxed) != generation {
                 break;
             }
-            if current_generation.load(Ordering::Relaxed) != generation {
+            if paused_flag.load(Ordering::Relaxed) {
+                if wake_rx.recv().is_err() {
+                    break;
+                }
+                last_pos = player.get_pos();
+                stall_ticks = 0;
+                continue;
+            }
+            match wake_rx.recv_timeout(Duration::from_millis(750)) {
+                Ok(()) => {
+                    last_pos = player.get_pos();
+                    stall_ticks = 0;
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if stop_flag.load(Ordering::Relaxed) || current_generation.load(Ordering::Relaxed) != generation {
                 break;
             }
             if seeking.load(Ordering::Relaxed) {
+                last_pos = player.get_pos();
+                stall_ticks = 0;
+                continue;
+            }
+            if paused_flag.load(Ordering::Relaxed) {
                 continue;
             }
             if player.empty() {
-                if current_generation.load(Ordering::Relaxed) == generation && !seeking.load(Ordering::Relaxed) {
+                let pos = player.get_pos();
+                let ended = duration_secs.map(|d| pos.as_secs() + 2 >= d).unwrap_or(true);
+                if ended {
                     let _ = evt_tx.send(PlayerEvent::Ended { generation });
                     ctx.request_repaint();
+                } else {
+                    let _ = msg_tx.send(WorkerMsg::OutputStalled { generation, position_secs: pos.as_secs() });
                 }
                 break;
             }
+            let pos = player.get_pos();
+            if pos == last_pos && pos.as_secs() > 1 {
+                stall_ticks += 1;
+                if stall_ticks >= 3 {
+                    let _ = msg_tx.send(WorkerMsg::OutputStalled { generation, position_secs: pos.as_secs() });
+                    break;
+                }
+            } else {
+                stall_ticks = 0;
+            }
+            last_pos = pos;
         }
     })
 }

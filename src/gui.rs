@@ -6,10 +6,17 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::{Code, HotKey}};
 use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::{Menu, MenuEvent, MenuItem}};
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
+const SIMILAR_TRACKS_MENU: &str = "\u{041f}\u{043e}\u{0445}\u{043e}\u{0436}\u{0438}\u{0435} \u{0442}\u{0440}\u{0435}\u{043a}\u{0438}";
+const SAVE_MP3_MENU: &str = "\u{0421}\u{043e}\u{0445}\u{0440}\u{0430}\u{043d}\u{0438}\u{0442}\u{044c} MP3";
+const SAVE_NO_TRACK_TEXT: &str = "\u{041d}\u{0435}\u{0442} \u{0430}\u{043a}\u{0442}\u{0438}\u{0432}\u{043d}\u{043e}\u{0433}\u{043e} \u{0442}\u{0440}\u{0435}\u{043a}\u{0430}";
+const SAVE_NO_DIR_TEXT: &str = "\u{041d}\u{0435} \u{043d}\u{0430}\u{0439}\u{0434}\u{0435}\u{043d}\u{0430} \u{043f}\u{0430}\u{043f}\u{043a}\u{0430} \u{041c}\u{0443}\u{0437}\u{044b}\u{043a}\u{0430} \u{0438}\u{043b}\u{0438} \u{0417}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043a}\u{0438}";
+const SAVE_SAVING_PREFIX: &str = "\u{0421}\u{043e}\u{0445}\u{0440}\u{0430}\u{043d}\u{0435}\u{043d}\u{0438}\u{0435}: ";
+const SAVE_DONE_PREFIX: &str = "\u{0421}\u{043e}\u{0445}\u{0440}\u{0430}\u{043d}\u{0435}\u{043d}\u{043e}: ";
 const CREDENTIALS_SAVE_ERROR_TEXT: &str = "\u{041D}\u{0435} \u{0443}\u{0434}\u{0430}\u{043B}\u{043E}\u{0441}\u{044C} \u{0441}\u{043E}\u{0445}\u{0440}\u{0430}\u{043D}\u{0438}\u{0442}\u{044C} \u{043B}\u{043E}\u{0433}\u{0438}\u{043D}";
 const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
 const MEDIA_KEYS_UNAVAILABLE_PREFIX: &str = "\u{041c}\u{0435}\u{0434}\u{0438}\u{0430}-\u{043a}\u{043b}\u{0430}\u{0432}\u{0438}\u{0448}\u{0438} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{044b}: ";
@@ -816,6 +823,7 @@ struct GuiAppImpl {
     rec_request_id: u64,
     rec_waiting_next: bool,
     rec_empty_retries: u8,
+    rec_target: Option<TrackId>,
 
     queue: Vec<Track>,
     queue_source: QueueSource,
@@ -938,6 +946,7 @@ impl GuiAppImpl {
             rec_request_id: 0,
             rec_waiting_next: false,
             rec_empty_retries: 0,
+            rec_target: None,
 
             queue: Vec::new(),
             queue_source: QueueSource::MyMusic,
@@ -1275,6 +1284,7 @@ impl GuiAppImpl {
             self.rec_no_more = false;
         }
         let request_id = self.rec_request_id;
+        let target = self.rec_target.map(|t| format!("{}_{}", t.owner_id, t.id));
         let token = self.token.clone();
         let ua = self.ua.clone();
         let tx = self.ui_evt_tx.clone();
@@ -1282,7 +1292,11 @@ impl GuiAppImpl {
         std::thread::spawn(move || {
             let res = (|| -> anyhow::Result<Vec<Track>> {
                 let client = api::build_client(&ua)?;
-                let resp: AudioGetResponse = api::vk_call(&client, &token, "audio.getRecommendations", &[("count", "50")])?;
+                let mut params: Vec<(&str, &str)> = vec![("count", "50")];
+                if let Some(target) = target.as_deref() {
+                    params.push(("target_audio", target));
+                }
+                let resp: AudioGetResponse = api::vk_call(&client, &token, "audio.getRecommendations", &params)?;
                 let items = resp.items.unwrap_or_default();
                 Ok(items.iter().map(Track::from_value).collect::<Vec<_>>())
             })();
@@ -1296,6 +1310,42 @@ impl GuiAppImpl {
             }
             ctx.request_repaint();
         });
+    }
+
+    fn open_similar_tracks(&mut self, target: TrackId) {
+        self.rec_target = Some(target);
+        self.active_tab = Tab::Recommendations;
+        self.rec_tracks.clear();
+        self.rec_loaded_once = false;
+        self.rec_loading = false;
+        self.rec_no_more = false;
+        self.rec_waiting_next = false;
+        self.rec_empty_retries = 0;
+        self.rec_status.clear();
+        self.request_recommendations(true);
+    }
+
+    fn request_generic_recommendations(&mut self) {
+        self.rec_target = None;
+        self.request_recommendations(true);
+    }
+
+    fn save_current_track(&mut self) {
+        let Some(np) = self.now_playing.as_ref() else {
+            self.status = SAVE_NO_TRACK_TEXT.to_string();
+            return;
+        };
+        let Some(dir) = save_directory() else {
+            self.status = SAVE_NO_DIR_TEXT.to_string();
+            return;
+        };
+        let stem = sanitize_file_name(&format!("{} - {}", np.artist, np.title));
+        let path = unique_save_path(&dir, &stem);
+        if self.cmd_tx.send(PlayerCmd::SaveCurrent { path: path.clone() }).is_err() {
+            self.status = SAVE_NO_TRACK_TEXT.to_string();
+            return;
+        }
+        self.status = format!("{SAVE_SAVING_PREFIX}{}", path.display());
     }
 
     fn retry_recommendations_after_empty(&mut self) {
@@ -1326,7 +1376,7 @@ impl GuiAppImpl {
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
         self.selected_playlist = None; self.playlist_tracks.clear(); self.playlist_tracks_count = None; self.loading_playlist_tracks = false; self.playlist_tracks_offset = 0; self.playlist_status.clear();
         self.search_query.clear(); self.search_input.clear(); self.search_tracks.clear(); self.search_count = None; self.loading_search = false; self.search_offset = 0; self.search_status.clear(); self.search_request_id = 0;
-        self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false; self.rec_empty_retries = 0;
+        self.rec_tracks.clear(); self.rec_loaded_once = false; self.rec_loading = false; self.rec_status.clear(); self.rec_no_more = false; self.rec_request_id = 0; self.rec_waiting_next = false; self.rec_empty_retries = 0; self.rec_target = None;
 
         self.queue.clear(); self.queue_source = QueueSource::MyMusic; self.queue_playlist = None; self.queue_search_query = None;
         self.clear_shuffle_round();
@@ -2303,6 +2353,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                     }
                 }
                 PlayerEvent::Volume(vol) => { self.volume = vol.clamp(0.0, 1.0); }
+                PlayerEvent::Saved { path } => {
+                    self.status = format!("{SAVE_DONE_PREFIX}{path}");
+                }
+                PlayerEvent::SaveError(msg) => {
+                    crate::log_status_error(&msg);
+                    self.status = msg;
+                }
                 PlayerEvent::Error(msg) => {
                     self.pending_play_track_id = None;
                     self.now_playing = None;
@@ -2589,6 +2646,17 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 self.play_from_list(source, i);
             }
         }
+        let is_current = self.now_playing.as_ref().and_then(|np| np.track_id) == Some(tid);
+        resp.context_menu(|ui| {
+            if ui.button(SIMILAR_TRACKS_MENU).clicked() {
+                self.open_similar_tracks(tid);
+                ui.close();
+            }
+            if is_current && ui.button(SAVE_MP3_MENU).clicked() {
+                self.save_current_track();
+                ui.close();
+            }
+        });
     }
 
     fn render_track_action(&mut self, ui: &mut egui::Ui, track: &Track, source: QueueSource, tid: &TrackId, row_resp: &egui::Response, visible: bool) -> bool {
@@ -2756,6 +2824,48 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         });
     }
 
+}
+
+fn save_directory() -> Option<PathBuf> {
+    let profile = std::env::var_os("USERPROFILE")?;
+    let profile = PathBuf::from(profile);
+    let music = profile.join("Music");
+    if music.is_dir() {
+        return Some(music);
+    }
+    let downloads = profile.join("Downloads");
+    if downloads.is_dir() {
+        return Some(downloads);
+    }
+    None
+}
+
+fn sanitize_file_name(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    let cleaned = out.trim().trim_matches('.').trim();
+    let mut name = if cleaned.is_empty() { "track".to_string() } else { cleaned.to_string() };
+    if name.chars().count() > 120 {
+        name = name.chars().take(120).collect::<String>();
+        name = name.trim_end().to_string();
+    }
+    name
+}
+
+fn unique_save_path(dir: &Path, stem: &str) -> PathBuf {
+    let mut path = dir.join(format!("{stem}.mp3"));
+    let mut n = 2u32;
+    while path.exists() {
+        path = dir.join(format!("{stem} ({n}).mp3"));
+        n += 1;
+    }
+    path
 }
 
 impl eframe::App for GuiAppImpl {
@@ -3350,7 +3460,7 @@ impl eframe::App for GuiAppImpl {
                         let (button_rect, _) = ui.allocate_exact_size(egui::vec2(84.0, 30.0), egui::Sense::hover());
                         let clicked = ghost_pill_button(ui, button_rect, "rec.refresh", "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}");
                         if clicked && !self.rec_loading {
-                            self.request_recommendations(true);
+                            self.request_generic_recommendations();
                         }
                     });
                     let rec_status_error = status_is_error(&self.rec_status);

@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod api;
@@ -16,9 +17,12 @@ mod theme;
 
 const CRASH_LOG_MAX_BYTES: u64 = 200 * 1024;
 const FPS_LOG_MAX_BYTES: u64 = 100 * 1024;
+const TRIM_EVERY_WRITES: u64 = 200;
+static LOG_WRITES: AtomicU64 = AtomicU64::new(0);
 
 fn install_crash_logging() {
     prepare_crash_log();
+    prepare_fps_log();
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
         let location = match info.location() {
@@ -51,6 +55,19 @@ fn fps_log_path() -> Option<PathBuf> {
 fn prepare_crash_log() {
     if let Some(path) = crash_log_path() {
         trim_log(&path, CRASH_LOG_MAX_BYTES);
+    }
+}
+
+fn prepare_fps_log() {
+    if let Some(path) = fps_log_path() {
+        trim_log(&path, FPS_LOG_MAX_BYTES);
+    }
+}
+
+fn maybe_trim_log(path: &Path, max_bytes: u64) {
+    let writes = LOG_WRITES.fetch_add(1, Ordering::Relaxed) + 1;
+    if writes % TRIM_EVERY_WRITES == 0 {
+        trim_log(path, max_bytes);
     }
 }
 
@@ -96,7 +113,7 @@ fn append_crash_log_line(line: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(file, "{ts} {one_line}");
     }
-    trim_log(&path, CRASH_LOG_MAX_BYTES);
+    maybe_trim_log(&path, CRASH_LOG_MAX_BYTES);
 }
 
 pub(crate) fn log_fps_line(line: &str) {
@@ -114,7 +131,7 @@ pub(crate) fn log_fps_line(line: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(file, "{ts} {one_line}");
     }
-    trim_log(&path, FPS_LOG_MAX_BYTES);
+    maybe_trim_log(&path, FPS_LOG_MAX_BYTES);
 }
 
 fn main() -> ExitCode {
