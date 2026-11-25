@@ -2,10 +2,22 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "vkmusic";
 const TOKEN_USER: &str = "vk_token";
 const UA_USER: &str = "vk_ua";
+
+static REDACTION_TOKEN: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+
+fn redaction_cache() -> &'static Mutex<Option<Option<String>>> {
+    REDACTION_TOKEN.get_or_init(|| Mutex::new(None))
+}
+
+fn set_redaction_token(token: Option<String>) {
+    let mut guard = redaction_cache().lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(token);
+}
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SavedTrack {
@@ -42,27 +54,40 @@ struct Settings {
 pub fn load_saved_credentials() -> (Option<String>, Option<String>) {
     let token = read_secret(TOKEN_USER);
     let ua = read_secret(UA_USER);
-    match (token, ua) {
+    let result = match (token, ua) {
         (Some(t), Some(u)) if !t.trim().is_empty() && !u.trim().is_empty() => (Some(t), Some(u)),
         _ => (None, None),
-    }
+    };
+    set_redaction_token(result.0.clone());
+    result
 }
 
 pub fn saved_token_for_redaction() -> Option<String> {
-    read_secret(TOKEN_USER)
+    {
+        let guard = redaction_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let value = read_secret(TOKEN_USER);
+    set_redaction_token(value.clone());
+    value
 }
 
-pub fn save_credentials(token: &str, ua: &str) {
+pub fn save_credentials(token: &str, ua: &str) -> Result<()> {
     if token.trim().is_empty() || ua.trim().is_empty() {
-        return;
+        return Ok(());
     }
-    let _ = write_secret(TOKEN_USER, token);
-    let _ = write_secret(UA_USER, ua);
+    write_secret(TOKEN_USER, token)?;
+    write_secret(UA_USER, ua)?;
+    set_redaction_token(Some(token.to_string()));
+    Ok(())
 }
 
 pub fn delete_credentials() {
     let _ = delete_secret(TOKEN_USER);
     let _ = delete_secret(UA_USER);
+    set_redaction_token(None);
 }
 
 pub fn load_volume() -> f32 {
@@ -173,8 +198,15 @@ fn settings_path() -> Option<PathBuf> {
 
 fn load_settings() -> Settings {
     let Some(path) = settings_path() else { return Settings::default(); };
-    let Ok(bytes) = fs::read(path) else { return Settings::default(); };
-    serde_json::from_slice::<Settings>(&bytes).unwrap_or_default()
+    let Ok(bytes) = fs::read(&path) else { return Settings::default(); };
+    match serde_json::from_slice::<Settings>(&bytes) {
+        Ok(settings) => settings,
+        Err(_) => {
+            let backup = path.with_extension("json.bak");
+            let _ = fs::rename(&path, &backup);
+            Settings::default()
+        }
+    }
 }
 
 fn save_settings(settings: &Settings) -> Result<()> {
@@ -183,6 +215,11 @@ fn save_settings(settings: &Settings) -> Result<()> {
         fs::create_dir_all(parent).context("create settings dir")?;
     }
     let data = serde_json::to_vec(settings).context("serialize settings")?;
-    fs::write(path, data).context("write settings")?;
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, data).context("write settings temp")?;
+    if let Err(e) = fs::rename(&temp, &path) {
+        let _ = fs::remove_file(&temp);
+        return Err(e).context("replace settings");
+    }
     Ok(())
 }

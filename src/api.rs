@@ -26,7 +26,6 @@ pub struct AudioGetResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct PlaylistsGetResponse {
-    #[allow(dead_code)]
     pub count: Option<u64>,
     pub items: Option<Vec<Value>>,
 }
@@ -203,26 +202,23 @@ pub fn sanitize_output(input: &str) -> String {
 }
 
 pub fn redact_urls(input: &str) -> String {
-
-    let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let rest = &input[i..];
-        let is_http = rest.starts_with("http://") || rest.starts_with("https://");
-        if is_http {
+    let mut rest = input;
+    while !rest.is_empty() {
+        if rest.starts_with("http://") || rest.starts_with("https://") {
             out.push_str("<url>");
-            while i < bytes.len() {
-                let b = bytes[i] as char;
-                if b.is_whitespace() || matches!(b, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | ',') {
-                    break;
-                }
-                i += b.len_utf8();
-            }
+            let end = rest
+                .char_indices()
+                .find(|&(_, ch)| {
+                    ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | ',')
+                })
+                .map(|(idx, _)| idx)
+                .unwrap_or(rest.len());
+            rest = &rest[end..];
         } else {
             let ch = rest.chars().next().unwrap();
             out.push(ch);
-            i += ch.len_utf8();
+            rest = &rest[ch.len_utf8()..];
         }
     }
     out

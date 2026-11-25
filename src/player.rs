@@ -206,8 +206,7 @@ fn worker_loop(
                         _ => None,
                     }
                 };
-                let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
-                current_generation.store(generation, Ordering::Relaxed);
+        let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
                 send_evt(
                     &evt_tx,
                     &ctx,

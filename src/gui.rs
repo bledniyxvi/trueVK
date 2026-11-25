@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
+const CREDENTIALS_SAVE_ERROR_TEXT: &str = "\u{041D}\u{0435} \u{0443}\u{0434}\u{0430}\u{043B}\u{043E}\u{0441}\u{044C} \u{0441}\u{043E}\u{0445}\u{0440}\u{0430}\u{043D}\u{0438}\u{0442}\u{044C} \u{043B}\u{043E}\u{0433}\u{0438}\u{043D}";
 const PLAYER_CHANNEL_CLOSED_TEXT: &str = "\u{043F}\u{043B}\u{0435}\u{0435}\u{0440} \u{043D}\u{0435}\u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0435}\u{043D}";
 const MEDIA_KEYS_UNAVAILABLE_PREFIX: &str = "\u{041c}\u{0435}\u{0434}\u{0438}\u{0430}-\u{043a}\u{043b}\u{0430}\u{0432}\u{0438}\u{0448}\u{0438} \u{043d}\u{0435}\u{0434}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{044b}: ";
 const MEDIA_KEYS_BUSY_PREFIX: &str = "\u{041c}\u{0435}\u{0434}\u{0438}\u{0430}-\u{043a}\u{043b}\u{0430}\u{0432}\u{0438}\u{0448}\u{0438} \u{0437}\u{0430}\u{043d}\u{044f}\u{0442}\u{044b}: ";
@@ -737,6 +738,15 @@ impl RepeatMode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoadErrorSource {
+    Tracks,
+    Playlists,
+    PlaylistTracks,
+    Search,
+    UserId,
+}
+
 enum UiEvent {
     TracksLoaded { offset: usize, count: Option<u64>, items: Vec<Track> },
     PlaylistsLoaded { offset: usize, count: Option<u64>, items: Vec<PlaylistView> },
@@ -754,7 +764,8 @@ enum UiEvent {
     ShowWindow,
     RestoredTrackResolved { track: Track },
     RestoredTrackUnavailable(String),
-    LoadError(String),
+    MyUserId(i64),
+    LoadError { source: LoadErrorSource, msg: String },
 }
 struct GuiAppImpl {
     cmd_tx: Sender<PlayerCmd>,
@@ -766,6 +777,8 @@ struct GuiAppImpl {
     logged_in: bool,
     login_input: String,
     my_user_id: Option<i64>,
+    my_user_id_pending: bool,
+    my_user_id_failed: bool,
 
     tracks: Vec<Track>,
     tracks_count: Option<u64>,
@@ -886,6 +899,8 @@ impl GuiAppImpl {
             logged_in,
             login_input: String::new(),
             my_user_id: None,
+            my_user_id_pending: false,
+            my_user_id_failed: false,
 
             tracks: Vec::new(),
             tracks_count: None,
@@ -1078,7 +1093,7 @@ impl GuiAppImpl {
             })();
             match res {
                 Ok((count, items)) => { let _ = tx.send(UiEvent::TracksLoaded { offset, count, items }); }
-                Err(e) => { let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}")))); }
+                Err(e) => { let _ = tx.send(UiEvent::LoadError { source: LoadErrorSource::Tracks, msg: api::sanitize_output(&format!("{e:#}")) }); }
             }
             ctx.request_repaint();
         });
@@ -1118,7 +1133,7 @@ impl GuiAppImpl {
             })();
             match res {
                 Ok((count, items)) => { let _ = tx.send(UiEvent::PlaylistsLoaded { offset, count, items }); }
-                Err(e) => { let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}")))); }
+                Err(e) => { let _ = tx.send(UiEvent::LoadError { source: LoadErrorSource::Playlists, msg: api::sanitize_output(&format!("{e:#}")) }); }
             }
             ctx.request_repaint();
         });
@@ -1173,7 +1188,7 @@ impl GuiAppImpl {
             })();
             match res {
                 Ok((count, items)) => { let _ = tx.send(UiEvent::PlaylistTracksLoaded { playlist_id: pl.id, owner_id: pl.owner_id, offset, count, items }); }
-                Err(e) => { let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}")))); }
+                Err(e) => { let _ = tx.send(UiEvent::LoadError { source: LoadErrorSource::PlaylistTracks, msg: api::sanitize_output(&format!("{e:#}")) }); }
             }
             ctx.request_repaint();
         });
@@ -1228,7 +1243,7 @@ impl GuiAppImpl {
             })();
             match res {
                 Ok((count, items)) => { let _ = tx.send(UiEvent::SearchLoaded { query, request_id, offset, count, items }); }
-                Err(e) => { let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}")))); }
+                Err(e) => { let _ = tx.send(UiEvent::LoadError { source: LoadErrorSource::Search, msg: api::sanitize_output(&format!("{e:#}")) }); }
             }
             ctx.request_repaint();
         });
@@ -1263,33 +1278,6 @@ impl GuiAppImpl {
         });
     }
 
-    fn request_recommendations_more(&mut self) {
-        if self.rec_loading || self.rec_no_more { return; }
-        if !self.rec_loaded_once { self.request_recommendations(false); return; }
-        self.rec_loading = true;
-        self.rec_status = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}...".to_string();
-        self.rec_request_id = self.rec_request_id.wrapping_add(1);
-        let request_id = self.rec_request_id;
-        let replace = false;
-        let token = self.token.clone();
-        let ua = self.ua.clone();
-        let tx = self.ui_evt_tx.clone();
-        let ctx = self.egui_ctx.clone();
-        std::thread::spawn(move || {
-            let res = (|| -> anyhow::Result<Vec<Track>> {
-                let client = api::build_client(&ua)?;
-                let resp: AudioGetResponse = api::vk_call(&client, &token, "audio.getRecommendations", &[("count", "50")])?;
-                let items = resp.items.unwrap_or_default();
-                Ok(items.iter().map(Track::from_value).collect::<Vec<_>>())
-            })();
-            match res {
-                Ok(items) => { let _ = tx.send(UiEvent::RecommendationsLoaded { request_id, replace, items }); }
-                Err(e) => { let _ = tx.send(UiEvent::RecommendationsError { request_id, msg: api::sanitize_output(&format!("{e:#}")) }); }
-            }
-            ctx.request_repaint();
-        });
-    }
-
     fn retry_recommendations_after_empty(&mut self) {
         self.rec_empty_retries = self.rec_empty_retries.saturating_add(1);
         if self.rec_empty_retries >= 3 {
@@ -1300,7 +1288,7 @@ impl GuiAppImpl {
             return;
         }
         self.rec_waiting_next = true;
-        self.request_recommendations_more();
+        self.request_recommendations(false);
     }
 
     fn logout_to_login(&mut self, message: Option<String>) {
@@ -1311,6 +1299,8 @@ impl GuiAppImpl {
         self.using_saved_credentials = false;
         self.credentials_saved = false;
         self.my_user_id = None;
+        self.my_user_id_pending = false;
+        self.my_user_id_failed = false;
 
         self.tracks.clear(); self.tracks_version += 1; self.tracks_count = None; self.loading_tracks = false; self.next_offset = 0; self.my_status.clear();
         self.playlists.clear(); self.playlists_count = None; self.loading_playlists = false; self.playlists_offset = 0; self.playlists_status.clear();
@@ -1587,13 +1577,13 @@ fn set_queue_for_my_music(&mut self) {
                 }
             } else if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
                 self.rec_waiting_next = true;
-                self.request_recommendations_more();
+                self.request_recommendations(false);
                 return;
             }
         } else {
             if self.queue_source == QueueSource::Recommendations && !self.rec_no_more {
                 self.rec_waiting_next = true;
-                self.request_recommendations_more();
+                self.request_recommendations(false);
                 return;
             }
             if self.repeat_mode == RepeatMode::All {
@@ -1951,7 +1941,8 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
     }
 
     fn ensure_my_user_id(&mut self) {
-        if self.my_user_id.is_some() || !self.logged_in { return; }
+        if self.my_user_id.is_some() || self.my_user_id_pending || self.my_user_id_failed || !self.logged_in { return; }
+        self.my_user_id_pending = true;
         let token = self.token.clone();
         let ua = self.ua.clone();
         let tx = self.ui_evt_tx.clone();
@@ -1963,12 +1954,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 let user = users.first().ok_or_else(|| anyhow::anyhow!("users.get returned no user"))?;
                 user.get("id").and_then(serde_json::Value::as_i64).ok_or_else(|| anyhow::anyhow!("users.get missing id"))
             })();
-            if let Err(e) = res {
-                let _ = tx.send(UiEvent::LoadError(api::sanitize_output(&format!("{e:#}"))));
-            } else if let Ok(id) = res {
-                // send via LoadError? no; use a dedicated event - simpler: piggyback by setting in ui thread via event not available.
-                // We'll handle by storing in status-less event; easiest is to add UiEvent::MyUserId, but to keep small, reuse LoadError impossible.
-                let _ = tx.send(UiEvent::LoadError(format!("__MY_USER_ID__:{id}")));
+            match res {
+                Ok(id) => { let _ = tx.send(UiEvent::MyUserId(id)); }
+                Err(e) => { let _ = tx.send(UiEvent::LoadError { source: LoadErrorSource::UserId, msg: api::sanitize_output(&format!("{e:#}")) }); }
             }
             ctx.request_repaint();
         });
@@ -2002,9 +1990,16 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                             self.filter_autoload_stopped = true;
                         }
                         if !self.credentials_saved {
-                            storage::save_credentials(&self.token, &self.ua);
-                            self.credentials_saved = true;
-                            self.using_saved_credentials = false;
+                            match storage::save_credentials(&self.token, &self.ua) {
+                                Ok(()) => {
+                                    self.credentials_saved = true;
+                                    self.using_saved_credentials = false;
+                                }
+                                Err(e) => {
+                                    crate::log_status_error(&format!("credentials: {e:#}"));
+                                    self.status = CREDENTIALS_SAVE_ERROR_TEXT.to_string();
+                                }
+                            }
                         }
                         if self.queue_source == QueueSource::MyMusic && self.my_filter.trim().is_empty() {
                             self.queue = self.tracks.clone();
@@ -2176,20 +2171,27 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.status = msg;
                     }
                 }
-                UiEvent::LoadError(msg) => {
-                    if let Some(id_s) = msg.strip_prefix("__MY_USER_ID__:") {
-                        if let Ok(id) = id_s.parse::<i64>() {
-                            self.my_user_id = Some(id);
-                        }
+                UiEvent::MyUserId(id) => {
+                    self.my_user_id = Some(id);
+                    self.my_user_id_pending = false;
+                    self.my_user_id_failed = false;
+                }
+                UiEvent::LoadError { source, msg } => {
+                    if source == LoadErrorSource::UserId {
+                        self.my_user_id_pending = false;
+                        self.my_user_id_failed = true;
+                        crate::log_status_error(&msg);
                         continue;
                     }
                     crate::log_status_error(&msg);
-                    let tracks_error = self.loading_tracks;
+                    let tracks_error = source == LoadErrorSource::Tracks;
                     self.loading_tracks = false;
                     self.loading_playlists = false;
                     self.loading_playlist_tracks = false;
                     self.loading_search = false;
-                    self.filter_autoload_stopped = true;
+                    if tracks_error {
+                        self.filter_autoload_stopped = true;
+                    }
                     if self.using_saved_credentials && api::is_auth_error(&anyhow::anyhow!("{}", msg)) {
                         self.logout_to_login(Some(TOKEN_EXPIRED_TEXT.to_string()));
                     } else if tracks_error || !self.my_filter.trim().is_empty() {
@@ -2255,8 +2257,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 }
                 PlayerEvent::Paused { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
+                    let tooltip = Self::tray_tooltip_for_track(&artist, &title);
                     self.now_playing = Some(NowPlaying { artist, title, base_secs: position_secs as f64, started_at: None, duration_secs, paused: true, track_id });
-                    self.sync_tray_tooltip(theme::APP_NAME);
+                    self.sync_tray_tooltip(&tooltip);
                 }
                 PlayerEvent::Resumed { artist, title, position_secs, duration_secs } => {
                     let track_id = self.now_playing.as_ref().and_then(|np| np.track_id).or(self.pending_play_track_id);
@@ -2948,8 +2951,10 @@ impl eframe::App for GuiAppImpl {
                         self.volume = t.clamp(0.0, 1.0);
                         self.volume_before_mute = None;
                         let _ = self.cmd_tx.send(PlayerCmd::SetVolume(self.volume));
-                        storage::save_volume(self.volume);
                     }
+                }
+                if vol_resp.drag_stopped() || vol_resp.clicked() {
+                    storage::save_volume(self.volume);
                 }
                 let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
                 let pct_rect = egui::Rect::from_min_size(
@@ -3329,7 +3334,7 @@ impl eframe::App for GuiAppImpl {
                                 self.render_track_row(ui, i, &track, width, row_h, QueueSource::Recommendations, playing_here);
                             }
                             if self.rec_loaded_once && !self.rec_no_more && !self.rec_loading && range.end + 5 >= self.rec_tracks.len() {
-                                self.request_recommendations_more();
+                                self.request_recommendations(false);
                             }
                         });
                     }
