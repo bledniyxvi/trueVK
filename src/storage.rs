@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "vkmusic";
@@ -198,12 +198,16 @@ fn settings_path() -> Option<PathBuf> {
 
 fn load_settings() -> Settings {
     let Some(path) = settings_path() else { return Settings::default(); };
-    let Ok(bytes) = fs::read(&path) else { return Settings::default(); };
+    load_settings_from(&path)
+}
+
+fn load_settings_from(path: &Path) -> Settings {
+    let Ok(bytes) = fs::read(path) else { return Settings::default(); };
     match serde_json::from_slice::<Settings>(&bytes) {
         Ok(settings) => settings,
         Err(_) => {
             let backup = path.with_extension("json.bak");
-            let _ = fs::rename(&path, &backup);
+            let _ = fs::rename(path, &backup);
             Settings::default()
         }
     }
@@ -211,15 +215,86 @@ fn load_settings() -> Settings {
 
 fn save_settings(settings: &Settings) -> Result<()> {
     let Some(path) = settings_path() else { return Ok(()); };
+    save_settings_to(&path, settings)
+}
+
+fn save_settings_to(path: &Path, settings: &Settings) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("create settings dir")?;
     }
     let data = serde_json::to_vec(settings).context("serialize settings")?;
     let temp = path.with_extension("json.tmp");
     fs::write(&temp, data).context("write settings temp")?;
-    if let Err(e) = fs::rename(&temp, &path) {
+    if let Err(e) = fs::rename(&temp, path) {
         let _ = fs::remove_file(&temp);
         return Err(e).context("replace settings");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("vkmusic-test-{}-{}", std::process::id(), n))
+    }
+
+    fn sample_settings() -> Settings {
+        Settings {
+            volume: Some(0.42),
+            last_track: Some(SavedTrack {
+                owner_id: 1,
+                audio_id: 2,
+                access_key: Some("key".to_string()),
+                artist: "Artist".to_string(),
+                title: "Title".to_string(),
+                duration: Some(123),
+            }),
+            repeat: Some("one".to_string()),
+            shuffle: true,
+            window_x: Some(10.0),
+            window_y: Some(20.0),
+            window_w: Some(800.0),
+            window_h: Some(600.0),
+        }
+    }
+
+    #[test]
+    fn settings_roundtrip() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        save_settings_to(&path, &sample_settings()).unwrap();
+        let loaded = load_settings_from(&path);
+        assert_eq!(loaded.volume, Some(0.42));
+        assert_eq!(loaded.repeat.as_deref(), Some("one"));
+        assert!(loaded.shuffle);
+        assert_eq!(loaded.window_w, Some(800.0));
+        let track = loaded.last_track.unwrap();
+        assert_eq!(track.owner_id, 1);
+        assert_eq!(track.audio_id, 2);
+        assert_eq!(track.access_key.as_deref(), Some("key"));
+        assert_eq!(track.title, "Title");
+        assert_eq!(track.duration, Some(123));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn corrupt_settings_are_backed_up() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        fs::write(&path, b"{not json").unwrap();
+        let loaded = load_settings_from(&path);
+        assert!(loaded.volume.is_none());
+        assert!(loaded.last_track.is_none());
+        assert!(!path.exists());
+        assert!(path.with_extension("json.bak").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

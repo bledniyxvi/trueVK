@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 
 use serde::Deserialize;
 use serde_json::Value;
+use std::fmt;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
@@ -36,10 +37,26 @@ pub struct VkError {
     pub error_msg: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct VkApiError {
+    pub code: i64,
+    pub msg: String,
+}
+
+impl fmt::Display for VkApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} VK API {}: {}", self.code, self.msg)
+    }
+}
+
+impl std::error::Error for VkApiError {}
+
 pub fn is_auth_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
-        let msg = cause.to_string();
-        msg.contains("VK API 5:") || msg.contains("VK API 15:")
+        cause
+            .downcast_ref::<VkApiError>()
+            .map(|e| e.code == 5 || e.code == 15)
+            .unwrap_or(false)
     })
 }
 
@@ -140,12 +157,9 @@ pub fn vk_call<T: for<'de> Deserialize<'de>>(
         if err.error_code == Some(14) {
             return Err(anyhow!("VK \u{0442}\u{0440}\u{0435}\u{0431}\u{0443}\u{0435}\u{0442} \u{043a}\u{0430}\u{043f}\u{0447}\u{0443}, \u{043f}\u{043e}\u{043f}\u{0440}\u{043e}\u{0431}\u{0443}\u{0439}\u{0442}\u{0435} \u{043f}\u{043e}\u{0437}\u{0436}\u{0435}"));
         }
-        let code = err
-            .error_code
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "<missing>".to_string());
+        let code = err.error_code.unwrap_or(0);
         let msg = err.error_msg.unwrap_or_else(|| "<missing>".to_string());
-        return Err(anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} VK API {}: {}", code, sanitize_output(&msg)));
+        return Err(anyhow::Error::new(VkApiError { code, msg: sanitize_output(&msg) }));
     }
     parsed
         .response
@@ -287,8 +301,52 @@ pub fn extract_access_token(input: &str) -> Option<String> {
             }
         }
     }
-    if !trimmed.chars().any(|c| c.is_whitespace()) && !trimmed.contains("://") {
+    let looks_like_token = trimmed.len() >= 20
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if looks_like_token {
         return Some(trimmed.to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_access_token, redact_urls};
+
+    #[test]
+    fn extracts_token_from_query_url() {
+        assert_eq!(
+            extract_access_token("https://oauth.vk.com/blank.html#access_token=vk1.a.abc&expires_in=0"),
+            Some("vk1.a.abc".to_string())
+        );
+        assert_eq!(
+            extract_access_token("https://x/?access_token=shorttoken"),
+            Some("shorttoken".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_plain_token_only_when_valid() {
+        let token = "vk1.a.abcdefghijklmnopqrstuvwxyz0123456789_-";
+        assert_eq!(extract_access_token(token), Some(token.to_string()));
+        assert_eq!(extract_access_token("abc"), None);
+        assert_eq!(extract_access_token("not a token"), None);
+        assert_eq!(extract_access_token("https://example.com/abc"), None);
+        assert_eq!(extract_access_token("garbage/with/slashes/and/more"), None);
+    }
+
+    #[test]
+    fn redacts_urls_without_panicking_on_utf8() {
+        assert_eq!(redact_urls("see https://example.com/a?b=1 now"), "see <url> now");
+        assert_eq!(
+            redact_urls("https://example.com/\u{043f}\u{0443}\u{0442}\u{044c}?x=1 rest"),
+            "<url> rest"
+        );
+        assert_eq!(
+            redact_urls("\u{041f}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442} https://x.y/\u{4e2d}\u{6587}"),
+            "\u{041f}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442} <url>"
+        );
+    }
 }

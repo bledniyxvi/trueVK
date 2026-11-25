@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::io::{Cursor, Read};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{Receiver, Sender},
+    mpsc::{self, Receiver, Sender},
     Arc, Mutex,
 };
 use std::thread;
@@ -39,13 +39,36 @@ pub enum PlayerEvent {
     Error(String),
 }
 
+enum WorkerMsg {
+    Cmd(PlayerCmd),
+    Downloaded {
+        generation: u64,
+        track: Track,
+        result: std::result::Result<Arc<Vec<u8>>, String>,
+    },
+}
+
+struct DownloadTask {
+    generation: u64,
+    cancel: Arc<AtomicBool>,
+}
+
 pub fn spawn_player_worker(
     client: reqwest::blocking::Client,
     cmd_rx: Receiver<PlayerCmd>,
     evt_tx: Sender<PlayerEvent>,
     ctx: eframe::egui::Context,
 ) -> thread::JoinHandle<()> {
-    thread::spawn(move || worker_loop(client, cmd_rx, evt_tx, ctx))
+    let (msg_tx, msg_rx) = mpsc::channel::<WorkerMsg>();
+    let bridge_tx = msg_tx.clone();
+    thread::spawn(move || {
+        while let Ok(cmd) = cmd_rx.recv() {
+            if bridge_tx.send(WorkerMsg::Cmd(cmd)).is_err() {
+                break;
+            }
+        }
+    });
+    thread::spawn(move || worker_loop(client, msg_rx, msg_tx, evt_tx, ctx))
 }
 
 fn send_evt(evt_tx: &Sender<PlayerEvent>, ctx: &eframe::egui::Context, evt: PlayerEvent) {
@@ -78,7 +101,8 @@ impl PlayingState {
 
 fn worker_loop(
     client: reqwest::blocking::Client,
-    cmd_rx: Receiver<PlayerCmd>,
+    msg_rx: Receiver<WorkerMsg>,
+    msg_tx: Sender<WorkerMsg>,
     evt_tx: Sender<PlayerEvent>,
     ctx: eframe::egui::Context,
 ) {
@@ -87,10 +111,48 @@ fn worker_loop(
     let current_generation = Arc::new(AtomicU64::new(0));
     let preload_slot: Arc<Mutex<Option<PreloadEntry>>> = Arc::new(Mutex::new(None));
     let preload_req = Arc::new(AtomicU64::new(0));
+    let mut download_task: Option<DownloadTask> = None;
+    let (preload_tx, preload_rx) = mpsc::channel::<(u64, Track)>();
+    spawn_preload_worker(
+        client.clone(),
+        preload_rx,
+        Arc::clone(&preload_slot),
+        Arc::clone(&preload_req),
+    );
 
-    while let Ok(cmd) = cmd_rx.recv() {
+    while let Ok(msg) = msg_rx.recv() {
+        let cmd = match msg {
+            WorkerMsg::Cmd(cmd) => cmd,
+            WorkerMsg::Downloaded { generation, track, result } => {
+                if download_task.as_ref().map(|t| t.generation) != Some(generation) {
+                    continue;
+                }
+                download_task = None;
+                if current_generation.load(Ordering::Relaxed) != generation {
+                    continue;
+                }
+                match result {
+                    Ok(bytes) => {
+                        match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
+                            Ok(s) => state = Some(s),
+                            Err(e) => send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}")))),
+                        }
+                    }
+                    Err(msg) => {
+                        if !msg.is_empty() {
+                            send_evt(&evt_tx, &ctx, PlayerEvent::Error(msg));
+                        }
+                    }
+                }
+                continue;
+            }
+        };
         match cmd {
             PlayerCmd::Shutdown => {
+                if let Some(task) = download_task.take() {
+                    task.cancel.store(true, Ordering::Relaxed);
+                }
+                current_generation.fetch_add(1, Ordering::Relaxed);
                 *preload_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 if let Some(s) = state.take() {
                     if !s.paused {
@@ -101,6 +163,10 @@ fn worker_loop(
                 break;
             }
             PlayerCmd::Stop => {
+                if let Some(task) = download_task.take() {
+                    task.cancel.store(true, Ordering::Relaxed);
+                }
+                current_generation.fetch_add(1, Ordering::Relaxed);
                 *preload_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 if let Some(s) = state.take() {
                     if !s.paused {
@@ -194,6 +260,9 @@ fn worker_loop(
                     }
                     s.stop();
                 }
+                if let Some(task) = download_task.take() {
+                    task.cancel.store(true, Ordering::Relaxed);
+                }
                 preload_req.fetch_add(1, Ordering::Relaxed);
                 let preloaded = {
                     let mut slot = preload_slot.lock().unwrap_or_else(|e| e.into_inner());
@@ -206,7 +275,7 @@ fn worker_loop(
                         _ => None,
                     }
                 };
-        let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
+                let generation = current_generation.fetch_add(1, Ordering::Relaxed) + 1;
                 send_evt(
                     &evt_tx,
                     &ctx,
@@ -216,11 +285,30 @@ fn worker_loop(
                         generation,
                     },
                 );
-                match play_track(&client, track, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation), preloaded) {
-                    Ok(s) => state = Some(s),
-                    Err(e) => {
-                        send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
+                if let Some(bytes) = preloaded {
+                    match play_bytes(track, bytes, &evt_tx, &ctx, volume, generation, Arc::clone(&current_generation)) {
+                        Ok(s) => state = Some(s),
+                        Err(e) => {
+                            send_evt(&evt_tx, &ctx, PlayerEvent::Error(sanitize_output(&format!("{e:#}"))));
+                        }
                     }
+                } else {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    download_task = Some(DownloadTask { generation, cancel: Arc::clone(&cancel) });
+                    let client2 = client.clone();
+                    let tx = msg_tx.clone();
+                    thread::spawn(move || {
+                        let result = (|| -> Result<Arc<Vec<u8>>> {
+                            let url = select_play_url(&client2, &track)?;
+                            let bytes = download_track_bytes_cancellable(&client2, &url, Some(&cancel))?;
+                            Ok(Arc::new(bytes))
+                        })();
+                        if cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let result = result.map_err(|e| sanitize_output(&format!("{e:#}")));
+                        let _ = tx.send(WorkerMsg::Downloaded { generation, track, result });
+                    });
                 }
             }
             PlayerCmd::Preload { track } => {
@@ -231,27 +319,8 @@ fn worker_loop(
                 if already {
                     continue;
                 }
-                let req = preload_req.fetch_add(1, Ordering::Relaxed) + 1;
-                let slot = Arc::clone(&preload_slot);
-                let req_flag = Arc::clone(&preload_req);
-                let client2 = client.clone();
-                thread::spawn(move || {
-                    let url = match select_play_url(&client2, &track) {
-                        Ok(u) => u,
-                        Err(_) => return,
-                    };
-                    let bytes = match download_track_bytes(&client2, &url) {
-                        Ok(b) => Arc::new(b),
-                        Err(_) => return,
-                    };
-                    if req_flag.load(Ordering::Relaxed) != req {
-                        return;
-                    }
-                    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
-                    if req_flag.load(Ordering::Relaxed) == req {
-                        *slot = Some(PreloadEntry { owner_id: track.owner_id, id: track.id, bytes });
-                    }
-                });
+                let request = preload_req.fetch_add(1, Ordering::Relaxed) + 1;
+                let _ = preload_tx.send((request, track));
             }
         }
     }
@@ -277,23 +346,15 @@ fn fade_in(player: &Player, target: f32) {
     player.set_volume(target);
 }
 
-fn play_track(
-    client: &reqwest::blocking::Client,
+fn play_bytes(
     track: Track,
+    bytes: Arc<Vec<u8>>,
     evt_tx: &Sender<PlayerEvent>,
     ctx: &eframe::egui::Context,
     volume: f32,
     generation: u64,
     current_generation: Arc<AtomicU64>,
-    preloaded: Option<Arc<Vec<u8>>>,
 ) -> Result<PlayingState> {
-    let bytes = match preloaded {
-        Some(b) => b,
-        None => {
-            let url = select_play_url(client, &track)?;
-            Arc::new(download_track_bytes(client, &url)?)
-        }
-    };
     let duration_secs = decode_duration(Arc::clone(&bytes)).map(|d| d.as_secs()).or(track.duration_secs);
 
     let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|_| anyhow!("\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})"))?;
@@ -338,6 +399,37 @@ fn play_track(
         seeking,
         monitor: Some(monitor),
         bytes,
+    })
+}
+
+fn spawn_preload_worker(
+    client: reqwest::blocking::Client,
+    rx: Receiver<(u64, Track)>,
+    slot: Arc<Mutex<Option<PreloadEntry>>>,
+    req: Arc<AtomicU64>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while let Ok((mut request, mut track)) = rx.recv() {
+            while let Ok((next_request, next_track)) = rx.try_recv() {
+                request = next_request;
+                track = next_track;
+            }
+            let url = match select_play_url(&client, &track) {
+                Ok(url) => url,
+                Err(_) => continue,
+            };
+            let bytes = match download_track_bytes(&client, &url) {
+                Ok(bytes) => Arc::new(bytes),
+                Err(_) => continue,
+            };
+            if req.load(Ordering::Relaxed) != request {
+                continue;
+            }
+            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if req.load(Ordering::Relaxed) == request {
+                *slot = Some(PreloadEntry { owner_id: track.owner_id, id: track.id, bytes });
+            }
+        }
     })
 }
 
@@ -466,11 +558,22 @@ struct DownloadFail {
 }
 
 fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
+    download_track_bytes_cancellable(client, url, None)
+}
+
+fn download_track_bytes_cancellable(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<u8>> {
     let mut attempt: u64 = 0;
     loop {
-        match download_once(client, url) {
+        match download_once(client, url, cancel) {
             Ok(bytes) => return Ok(bytes),
             Err(f) => {
+                if cancelled(cancel) {
+                    return Err(anyhow!(""));
+                }
                 if f.retryable && attempt < 2 {
                     attempt += 1;
                     std::thread::sleep(Duration::from_millis(400 * attempt));
@@ -482,11 +585,29 @@ fn download_track_bytes(client: &reqwest::blocking::Client, url: &str) -> Result
     }
 }
 
-fn download_once(client: &reqwest::blocking::Client, url: &str) -> std::result::Result<Vec<u8>, DownloadFail> {
+fn cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false)
+}
+
+fn cancelled_fail() -> DownloadFail {
+    DownloadFail { retryable: false, msg: String::new() }
+}
+
+fn download_once(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    cancel: Option<&AtomicBool>,
+) -> std::result::Result<Vec<u8>, DownloadFail> {
+    if cancelled(cancel) {
+        return Err(cancelled_fail());
+    }
     let mut resp = client.get(url).send().map_err(|e| DownloadFail {
         retryable: e.is_timeout() || e.is_connect(),
         msg: format!("{:#}", map_reqwest_error(e)),
     })?;
+    if cancelled(cancel) {
+        return Err(cancelled_fail());
+    }
     let status = resp.status();
     if !status.is_success() {
         return Err(DownloadFail {
@@ -509,6 +630,9 @@ fn download_once(client: &reqwest::blocking::Client, url: &str) -> std::result::
     let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
     let mut chunk = [0u8; 64 * 1024];
     loop {
+        if cancelled(cancel) {
+            return Err(cancelled_fail());
+        }
         let n = resp.read(&mut chunk).map_err(|_| DownloadFail {
             retryable: true,
             msg: "\u{041e}\u{0448}\u{0438}\u{0431}\u{043a}\u{0430} \u{0437}\u{0430}\u{043f}\u{0440}\u{043e}\u{0441}\u{0430} (\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435})".to_string(),

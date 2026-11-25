@@ -129,27 +129,100 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     install_crash_logging();
-    let single_instance = try_single_instance_gui()?;
-    if single_instance.is_none() {
-        return Ok(());
-    }
+    #[cfg(windows)]
+    let guard = match single_instance::acquire("Local\\trueVK-single-instance") {
+        single_instance::State::Acquired(guard) => Some(guard),
+        single_instance::State::AlreadyRunning => {
+            notify_existing_instance();
+            return Ok(());
+        }
+        single_instance::State::Unavailable => None,
+    };
+    #[cfg(not(windows))]
+    let guard: Option<()> = None;
+    let single_instance = single_instance_listener();
     let env_token = env::var("VK_TOKEN").ok().filter(|v| !v.trim().is_empty());
     let env_ua = env::var("VK_UA").ok().filter(|v| !v.trim().is_empty());
     gui::run_gui(env_token, env_ua, single_instance).map_err(|e| anyhow!("{}", e))?;
+    drop(guard);
     Ok(())
 }
 
 const SINGLE_INSTANCE_PORT: u16 = 47613;
 
-fn try_single_instance_gui() -> Result<Option<TcpListener>> {
-    match TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
-        Ok(listener) => Ok(Some(listener)),
-        Err(_) => {
-            if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
-                let _ = stream.write_all(b"show\n");
-                let _ = stream.flush();
+fn single_instance_listener() -> Option<TcpListener> {
+    TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)).ok()
+}
+
+fn notify_existing_instance() {
+    if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
+        let _ = stream.write_all(b"show\n");
+        let _ = stream.flush();
+    }
+}
+
+#[cfg(windows)]
+mod single_instance {
+    use std::ffi::c_void;
+    use std::ptr;
+
+    type Handle = *mut c_void;
+    const ERROR_ALREADY_EXISTS: u32 = 183;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateMutexW(attrs: *mut c_void, initial_owner: i32, name: *const u16) -> Handle;
+        fn GetLastError() -> u32;
+        fn SetLastError(error: u32);
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    pub struct Guard(Handle);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
             }
-            Ok(None)
         }
+    }
+
+    pub enum State {
+        Acquired(Guard),
+        AlreadyRunning,
+        Unavailable,
+    }
+
+    pub fn acquire(name: &str) -> State {
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            SetLastError(0);
+        }
+        let handle = unsafe { CreateMutexW(ptr::null_mut(), 0, wide.as_ptr()) };
+        let error = unsafe { GetLastError() };
+        if handle.is_null() {
+            return State::Unavailable;
+        }
+        if error == ERROR_ALREADY_EXISTS {
+            unsafe {
+                CloseHandle(handle);
+            }
+            State::AlreadyRunning
+        } else {
+            State::Acquired(Guard(handle))
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod single_instance {
+    pub enum State {
+        Acquired(()),
+        AlreadyRunning,
+        Unavailable,
+    }
+
+    pub fn acquire(_name: &str) -> State {
+        State::Unavailable
     }
 }
