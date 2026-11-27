@@ -1,3 +1,7 @@
+#ifndef AppVersion
+#define AppVersion "0.4.0"
+#endif
+
 [Setup]
 AppName=trueVK
 AppVersion={#AppVersion}
