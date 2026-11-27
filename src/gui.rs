@@ -35,7 +35,8 @@ const HOTKEY_NAME_NEXT: &str = "\u{0414}\u{0430}\u{043b}\u{0435}\u{0435}";
 const HOTKEY_NAME_PREV: &str = "\u{041d}\u{0430}\u{0437}\u{0430}\u{0434}";
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
-const TRACK_ROW_HEIGHT: f32 = 46.0;
+const TRACK_ROW_HEIGHT: f32 = 52.0;
+const LIST_SIDE_INSET: f32 = 6.0;
 const ADD_TRACK_TOOLTIP: &str = "\u{0414}\u{043E}\u{0431}\u{0430}\u{0432}\u{0438}\u{0442}\u{044C} \u{0432} \u{043C}\u{043E}\u{044E} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0443}";
 const REMOVE_TRACK_TOOLTIP: &str = "\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}";
 const NOTHING_PLAYING_TEXT: &str = "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}";
@@ -43,12 +44,7 @@ const PREV_TOOLTIP: &str = "\u{041F}\u{0440}\u{0435}\u{0434}\u{044B}\u{0434}\u{0
 const PLAY_TOOLTIP: &str = "\u{0418}\u{0433}\u{0440}\u{0430}\u{0442}\u{044C}";
 const PAUSE_TOOLTIP: &str = "\u{041F}\u{0430}\u{0443}\u{0437}\u{0430}";
 const NEXT_TOOLTIP: &str = "\u{0421}\u{043B}\u{0435}\u{0434}\u{0443}\u{044E}\u{0449}\u{0438}\u{0439}";
-const STOP_TOOLTIP: &str = "\u{0421}\u{0442}\u{043E}\u{043F}";
 const REPEAT_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}";
-const REPEAT_ALL_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: \u{0432}\u{0441}\u{0435}";
-const REPEAT_ONE_LABEL: &str = "\u{041F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}: 1";
-const REPEAT_TOOLTIP: &str = "\u{0420}\u{0435}\u{0436}\u{0438}\u{043C} \u{043F}\u{043E}\u{0432}\u{0442}\u{043E}\u{0440}\u{0430}";
-const SHUFFLE_TOOLTIP: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0438}\u{0442}\u{044C} \u{0432}\u{043E}\u{0441}\u{043F}\u{0440}\u{043E}\u{0438}\u{0437}\u{0432}\u{0435}\u{0434}\u{0435}\u{043D}\u{0438}\u{0435}";
 const MUTE_TOOLTIP: &str = "\u{0412}\u{044B}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
 const UNMUTE_TOOLTIP: &str = "\u{0412}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
 const MENU_TOOLTIP: &str = "\u{041C}\u{0435}\u{043D}\u{044E}";
@@ -82,13 +78,14 @@ const EMPTY_REC_NO_MORE_SUB: &str = "\u{043D}\u{0430}\u{0436}\u{043C}\u{0438} \u
 const TOP_BAR_H: f32 = 44.0;
 const TOP_TAB_GAP: f32 = 22.0;
 const TOP_MENU_SIZE: f32 = 28.0;
-const PANEL_MARGIN_X: f32 = 12.0;
-const PANEL_BOTTOM_MARGIN: f32 = 10.0;
-const PANEL_PROGRESS_HIT_H: f32 = 14.0;
-const PANEL_ZONES_H: f32 = 92.0;
-const PANEL_CENTER_W: f32 = 240.0;
+const PANEL_MARGIN_X: f32 = 14.0;
+const PANEL_BOTTOM_MARGIN: f32 = 8.0;
+const PANEL_PROGRESS_HIT_H: f32 = 12.0;
+const PANEL_ZONES_H: f32 = 54.0;
+const PANEL_CENTER_W: f32 = 220.0;
 const PANEL_RIGHT_W: f32 = 200.0;
 const PANEL_ZONE_GAP: f32 = 2.0;
+const PANEL_HEIGHT: f32 = 80.0;
 const LOGIN_OPEN_LABEL: &str = "\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}";
 const LOGIN_COPY_LABEL: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}";
 const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{438}\u{442}\u{44c}";
@@ -255,7 +252,13 @@ enum TransportIcon {
     Play,
     Pause,
     Next,
-    Stop,
+}
+
+#[derive(Clone, Copy)]
+enum ModeIcon {
+    Shuffle,
+    Repeat,
+    RepeatOne,
 }
 
 fn paint_bar(painter: &egui::Painter, x0: f32, x1: f32, y: f32, fraction: f32, thickness: f32, handle: bool) {
@@ -334,26 +337,18 @@ fn draw_skeleton_rows(ui: &mut egui::Ui, rect: egui::Rect, row_h: f32) {
     let widths = [0.42, 0.55, 0.34, 0.48, 0.30, 0.52, 0.38, 0.50, 0.33];
     let sub_widths = [0.24, 0.27, 0.21, 0.26, 0.20, 0.30, 0.23, 0.25, 0.22];
     let radius = egui::CornerRadius::same(4);
-    let inset = 6.0;
-    let number_w = 28.0;
-    let cover_total = 36.0 + 8.0 + 8.0;
-    let duration_w = 38.0;
-    let text_left = rect.min.x + inset + number_w + cover_total;
-    let text_w = (rect.width() - inset * 2.0 - number_w - cover_total - duration_w - 12.0).max(80.0);
+    let inset = LIST_SIDE_INSET;
+    let cover_size = 40.0;
+    let cover_gap = 12.0;
+    let duration_w = 52.0;
+    let text_left = rect.min.x + inset + cover_size + cover_gap;
+    let text_w = (rect.width() - inset * 2.0 - cover_size - cover_gap - duration_w - 12.0).max(80.0);
     for i in 0..9 {
         let cy = rect.min.y + row_h * (i as f32) + row_h * 0.5;
         painter.rect_filled(
             egui::Rect::from_center_size(
-                egui::pos2(rect.min.x + inset + number_w * 0.5, cy),
-                egui::vec2(number_w, 8.0),
-            ),
-            radius,
-            theme::SURFACE,
-        );
-        painter.rect_filled(
-            egui::Rect::from_center_size(
-                egui::pos2(rect.min.x + inset + number_w + 8.0 + 36.0 * 0.5, cy),
-                egui::vec2(36.0, 36.0),
+                egui::pos2(rect.min.x + inset + cover_size * 0.5, cy),
+                egui::vec2(cover_size, cover_size),
             ),
             radius,
             theme::SURFACE,
@@ -570,11 +565,6 @@ fn draw_playing_marker(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
     }
 }
 
-fn draw_hover_play_marker(ui: &egui::Ui, rect: egui::Rect) {
-    let tri = egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 12.0));
-    ui.painter().add(egui::Shape::rotated_triangle(tri, -std::f32::consts::FRAC_PI_2, theme::MUTED));
-}
-
 fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: TransportIcon, enabled: bool, tooltip: &str) -> bool {
     let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
     let hovered = resp.hovered() && enabled;
@@ -618,9 +608,6 @@ fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: Transpo
             painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x - 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
             painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x + 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
         }
-        TransportIcon::Stop => {
-            painter.rect_filled(egui::Rect::from_center_size(center, egui::vec2(14.0, 14.0)), egui::CornerRadius::same(3), color);
-        }
     }
     let resp = resp.on_hover_text(tooltip);
     if hovered {
@@ -629,16 +616,40 @@ fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: Transpo
     resp.clicked() && enabled
 }
 
-fn pill_toggle(ui: &mut egui::Ui, rect: egui::Rect, id: &str, label: &str, active: bool, tooltip: &str) -> bool {
+fn draw_mode_icon(painter: &egui::Painter, center: egui::Pos2, icon: ModeIcon, active: bool) {
+    let color = if active { theme::ACCENT } else { theme::MUTED };
+    let stroke = egui::Stroke::new(1.6, color);
+    match icon {
+        ModeIcon::Shuffle => {
+            painter.line(vec![egui::pos2(center.x - 8.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y + 6.0)], stroke);
+            painter.line(vec![egui::pos2(center.x - 8.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y - 6.0)], stroke);
+            painter.line(vec![egui::pos2(center.x + 3.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y + 1.0)], stroke);
+            painter.line(vec![egui::pos2(center.x + 3.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y - 1.0)], stroke);
+        }
+        ModeIcon::Repeat | ModeIcon::RepeatOne => {
+            let l = center.x - 8.0;
+            let r = center.x + 8.0;
+            let t = center.y - 6.0;
+            let b = center.y + 6.0;
+            painter.line(vec![egui::pos2(r - 4.0, t), egui::pos2(l, t), egui::pos2(l, b), egui::pos2(r - 4.0, b)], stroke);
+            painter.add(egui::Shape::convex_polygon(vec![
+                egui::pos2(r - 5.0, b - 3.0),
+                egui::pos2(r - 5.0, b + 3.0),
+                egui::pos2(r + 1.0, b),
+            ], color, egui::Stroke::NONE));
+            if matches!(icon, ModeIcon::RepeatOne) {
+                painter.text(center + egui::vec2(0.0, -1.0), egui::Align2::CENTER_CENTER, "1", theme::semibold_font(9.0), color);
+            }
+        }
+    }
+}
+
+fn mode_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: ModeIcon, active: bool, tooltip: &str) -> bool {
     let resp = ui.interact(rect, ui.make_persistent_id(id), egui::Sense::click());
-    let fill = if active { theme::ACCENT_DIM } else { theme::SURFACE };
-    let stroke = if active { theme::ACCENT } else { theme::BORDER };
-    let text_color = if active { theme::ACCENT } else { theme::MUTED };
-    let radius = egui::CornerRadius::same(11);
-    let painter = ui.painter();
-    painter.rect_filled(rect, radius, fill);
-    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Middle);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold_font(12.0), text_color);
+    if resp.hovered() {
+        ui.painter().circle_filled(rect.center(), rect.width() * 0.5, theme::HOVER);
+    }
+    draw_mode_icon(ui.painter(), rect.center(), icon, active);
     let resp = resp.on_hover_text(tooltip);
     if resp.hovered() {
         resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -2654,7 +2665,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let _ = self.cover_tx.send(url.to_string());
     }
 
-    fn paint_cover(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<&str>) {
+    fn paint_cover(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<&str>, playing: bool) {
         self.request_cover(url);
         let texture = url.and_then(|url| self.cover_cache.texture(url));
         if let Some(texture) = texture {
@@ -2673,17 +2684,22 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             );
             let cx = rect.center().x;
             let cy = rect.center().y;
-            let icon_color = theme::MUTED.gamma_multiply(0.6);
-            let r = (rect.width().min(rect.height()) * 0.35).max(6.0);
-            ui.painter().circle_stroke(egui::pos2(cx + r * 0.55, cy - r * 0.3), r * 0.35, egui::Stroke::new(1.5, icon_color));
+            let r = rect.width().min(rect.height()) * 0.4;
+            let stroke = egui::Stroke::new(1.8, theme::MUTED);
+            ui.painter().circle_stroke(egui::pos2(cx - r * 0.12, cy - r * 0.42), r * 0.34, stroke);
             ui.painter().line_segment(
-                [egui::pos2(cx + r * 0.9, cy - r * 0.3), egui::pos2(cx + r * 0.9, cy + r * 0.9)],
-                egui::Stroke::new(1.5, icon_color),
+                [egui::pos2(cx + r * 0.22, cy - r * 0.42), egui::pos2(cx + r * 0.22, cy + r * 0.8)],
+                stroke,
             );
             ui.painter().line_segment(
-                [egui::pos2(cx - r * 0.2, cy + r * 0.9), egui::pos2(cx + r * 1.1, cy + r * 0.55)],
-                egui::Stroke::new(1.5, icon_color),
+                [egui::pos2(cx - r * 0.46, cy + r * 0.8), egui::pos2(cx + r * 0.58, cy + r * 0.4)],
+                stroke,
             );
+        }
+        if playing {
+            let corner = egui::CornerRadius::same(6);
+            ui.painter().rect_filled(rect, corner, egui::Color32::from_black_alpha(110));
+            draw_playing_marker(ui, rect, self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false));
         }
     }
 
@@ -2708,10 +2724,8 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let Some(track) = self.row_track(source, i) else { return; };
         let track = &track;
         let is_playing = playing_in_this_list;
-        let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
         let playable = track.is_playable();
         let dur = track.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-        let idx_text = format!("{}", i + 1);
         let title_text = track.title.clone();
         let artist_text = track.artist.clone();
         self.ensure_cjk_font(ui.ctx(), &title_text);
@@ -2734,11 +2748,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             ui.painter().rect_filled(rect, corner, theme::HOVER);
         }
 
-        let inner = rect.shrink2(egui::vec2(6.0, 0.0));
-        let index_w = 28.0;
-        let index_gap = 8.0;
-        let cover_size = 36.0;
-        let cover_gap = 8.0;
+        let inner = rect.shrink2(egui::vec2(LIST_SIDE_INSET, 0.0));
+        let cover_size = 40.0;
+        let cover_gap = 12.0;
         let duration_w = 52.0;
         let action_w = if delete_confirm { 170.0 } else { 52.0 };
         let action_gap = 8.0;
@@ -2752,30 +2764,18 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             egui::pos2(action_right - action_w, rect.min.y),
             egui::vec2(action_w, row_h),
         );
-        let left_rect = egui::Rect::from_min_size(egui::pos2(inner.min.x, rect.min.y), egui::vec2(index_w, row_h));
-        let cover_left = inner.min.x + index_w + index_gap;
         let cover_rect = egui::Rect::from_center_size(
-            egui::pos2(cover_left + cover_size * 0.5, rect.center().y),
+            egui::pos2(inner.min.x + cover_size * 0.5, rect.center().y),
             egui::vec2(cover_size, cover_size),
         );
-        let text_min_x = cover_left + cover_size + cover_gap;
+        let text_min_x = cover_rect.max.x + cover_gap;
         let text_w = (action_rect.min.x - text_gap - text_min_x).max(40.0);
         let text_rect = egui::Rect::from_min_size(egui::pos2(text_min_x, rect.min.y), egui::vec2(text_w, row_h));
 
-        self.paint_cover(ui, cover_rect, track.cover_small.as_deref());
-
-        let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        left_ui.set_min_height(row_h);
-        if is_playing {
-            draw_playing_marker(ui, left_rect, paused);
-        } else if row_hovered {
-            draw_hover_play_marker(ui, left_rect);
-        } else {
-            left_ui.add(egui::Label::new(egui::RichText::new(idx_text).font(theme::mono_font(13.0)).color(theme::MUTED)).selectable(false));
-        }
+        self.paint_cover(ui, cover_rect, track.cover_small.as_deref(), is_playing);
 
         let dim = theme::MUTED.gamma_multiply(0.55);
-        let title_color = if playable { theme::TEXT } else { dim };
+        let title_color = if !playable { dim } else if is_playing { theme::ACCENT } else { theme::TEXT };
         let artist_color = if playable { theme::MUTED } else { dim };
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
         text_ui.set_min_height(row_h);
@@ -3069,9 +3069,9 @@ impl eframe::App for GuiAppImpl {
         egui::Panel::bottom("bottom")
             .frame(panel_frame)
             .show_separator_line(false)
-            .min_size(132.0)
-            .max_size(132.0)
-            .default_size(132.0)
+            .min_size(PANEL_HEIGHT)
+            .max_size(PANEL_HEIGHT)
+            .default_size(PANEL_HEIGHT)
             .show(ui, |ui| {
                 let content = ui.available_rect_before_wrap();
                 let top_y = content.min.y;
@@ -3124,8 +3124,9 @@ impl eframe::App for GuiAppImpl {
                 }
 
                 let zones_top = top_y + PANEL_PROGRESS_HIT_H + 2.0;
+                let controls_cy = zones_top + 22.0;
                 let max_left_w = content.width() - PANEL_CENTER_W - PANEL_RIGHT_W - 2.0 * PANEL_ZONE_GAP;
-                let left_w = ((content.width() * 0.30).max(150.0)).min(max_left_w).max(150.0);
+                let left_w = ((content.width() * 0.34).max(180.0)).min(max_left_w).max(150.0);
                 let zones_rect = egui::Rect::from_min_size(
                     egui::pos2(content.min.x, zones_top),
                     egui::vec2(content.width(), PANEL_ZONES_H),
@@ -3158,17 +3159,17 @@ impl eframe::App for GuiAppImpl {
                 };
                 self.ensure_cjk_font(ui.ctx(), &title);
                 self.ensure_cjk_font(ui.ctx(), &artist);
-                let cover_size = 56.0;
-                let cover_rect = egui::Rect::from_min_size(
-                    egui::pos2(left_rect.min.x, left_rect.min.y + (PANEL_ZONES_H - cover_size) * 0.5),
+                let cover_size = 48.0;
+                let cover_rect = egui::Rect::from_center_size(
+                    egui::pos2(left_rect.min.x + cover_size * 0.5, controls_cy),
                     egui::vec2(cover_size, cover_size),
                 );
                 let current_cover = self.current_cover_medium();
-                self.paint_cover(ui, cover_rect, current_cover.as_deref());
+                self.paint_cover(ui, cover_rect, current_cover.as_deref(), false);
                 let text_left = cover_rect.max.x + 12.0;
                 let text_h = 36.0;
                 let text_rect = egui::Rect::from_min_size(
-                    egui::pos2(text_left, left_rect.min.y + (PANEL_ZONES_H - text_h) * 0.5),
+                    egui::pos2(text_left, controls_cy - text_h * 0.5),
                     egui::vec2((left_rect.max.x - text_left).max(60.0), text_h),
                 );
                 let title_hover = title.clone();
@@ -3197,12 +3198,15 @@ impl eframe::App for GuiAppImpl {
                 let play_tooltip = if matches!(play_icon, TransportIcon::Play) { PLAY_TOOLTIP } else { PAUSE_TOOLTIP };
                 let play_enabled = self.now_playing.is_some() || self.restored_track.is_some();
                 let side_enabled = self.now_playing.is_some();
-                let controls_cy = zones_top + 22.0;
-                let controls_start = center_rect.center().x - 75.0;
-                let prev_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 14.0, controls_cy), egui::vec2(28.0, 28.0));
-                let play_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 58.0, controls_cy), egui::vec2(40.0, 40.0));
-                let next_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 102.0, controls_cy), egui::vec2(28.0, 28.0));
-                let stop_rect = egui::Rect::from_center_size(egui::pos2(controls_start + 138.0, controls_cy), egui::vec2(24.0, 24.0));
+                let cx = center_rect.center().x;
+                let shuffle_rect = egui::Rect::from_center_size(egui::pos2(cx - 88.0, controls_cy), egui::vec2(26.0, 26.0));
+                let prev_rect = egui::Rect::from_center_size(egui::pos2(cx - 44.0, controls_cy), egui::vec2(30.0, 30.0));
+                let play_rect = egui::Rect::from_center_size(egui::pos2(cx, controls_cy), egui::vec2(36.0, 36.0));
+                let next_rect = egui::Rect::from_center_size(egui::pos2(cx + 44.0, controls_cy), egui::vec2(30.0, 30.0));
+                let repeat_rect = egui::Rect::from_center_size(egui::pos2(cx + 88.0, controls_cy), egui::vec2(26.0, 26.0));
+                if mode_button(ui, shuffle_rect, "bottom.shuffle", ModeIcon::Shuffle, self.shuffle, SHUFFLE_LABEL) {
+                    self.toggle_shuffle();
+                }
                 if transport_button(ui, prev_rect, "bottom.prev", TransportIcon::Prev, side_enabled, PREV_TOOLTIP) {
                     self.play_prev();
                 }
@@ -3212,13 +3216,16 @@ impl eframe::App for GuiAppImpl {
                 if transport_button(ui, next_rect, "bottom.next", TransportIcon::Next, side_enabled, NEXT_TOOLTIP) {
                     self.play_next();
                 }
-                if transport_button(ui, stop_rect, "bottom.stop", TransportIcon::Stop, side_enabled, STOP_TOOLTIP) {
-                    let _ = self.cmd_tx.send(PlayerCmd::Stop);
+                let repeat_active = self.repeat_mode != RepeatMode::Off;
+                let repeat_icon = if self.repeat_mode == RepeatMode::One { ModeIcon::RepeatOne } else { ModeIcon::Repeat };
+                if mode_button(ui, repeat_rect, "bottom.repeat", repeat_icon, repeat_active, REPEAT_LABEL) {
+                    self.repeat_mode = self.repeat_mode.next();
+                    storage::save_repeat(self.repeat_mode.as_str());
                 }
 
                 let time_rect = egui::Rect::from_min_size(
-                    egui::pos2(center_rect.min.x, zones_top + 50.0),
-                    egui::vec2(PANEL_CENTER_W, 20.0),
+                    egui::pos2(center_rect.min.x, zones_top + 40.0),
+                    egui::vec2(PANEL_CENTER_W, 14.0),
                 );
                 let dur_text = if has_duration { api::format_mm_ss(dur) } else { "--:--".to_string() };
                 ui.painter().text(
@@ -3259,16 +3266,16 @@ impl eframe::App for GuiAppImpl {
                     }
                 }
 
-                let vol_bar_rect = egui::Rect::from_min_size(
-                    egui::pos2(right_rect.min.x + 34.0, zones_top + 18.0),
-                    egui::vec2(115.0, 8.0),
+                let vol_bar_rect = egui::Rect::from_center_size(
+                    egui::pos2(right_rect.min.x + 34.0 + 52.0, controls_cy),
+                    egui::vec2(104.0, 20.0),
                 );
                 let vol_resp = ui.interact(vol_bar_rect, ui.make_persistent_id("bottom.volume"), egui::Sense::click_and_drag());
                 paint_bar(
                     ui.painter(),
                     vol_bar_rect.min.x,
                     vol_bar_rect.max.x,
-                    zones_top + 22.0,
+                    controls_cy,
                     self.volume,
                     3.0,
                     vol_resp.hovered(),
@@ -3288,9 +3295,9 @@ impl eframe::App for GuiAppImpl {
                     storage::save_volume(self.volume);
                 }
                 let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
-                let pct_rect = egui::Rect::from_min_size(
-                    egui::pos2(right_rect.min.x + 170.0, zones_top + 10.0),
-                    egui::vec2(46.0, 24.0),
+                let pct_rect = egui::Rect::from_center_size(
+                    egui::pos2(vol_bar_rect.max.x + 8.0 + 20.0, controls_cy),
+                    egui::vec2(40.0, 24.0),
                 );
                 ui.painter().text(
                     pct_rect.center(),
@@ -3299,48 +3306,6 @@ impl eframe::App for GuiAppImpl {
                     theme::mono_font(12.0),
                     theme::MUTED,
                 );
-
-                let pill_y = zones_top + 54.0;
-                let pill_h = 22.0;
-                let repeat_w = measure_label_width(ui, REPEAT_ALL_LABEL, theme::semibold_font(12.0)) + 20.0;
-                let shuffle_w = measure_label_width(ui, SHUFFLE_LABEL, theme::semibold_font(12.0)) + 20.0;
-                let pill_gap = 6.0;
-                let pills_w = repeat_w + shuffle_w + pill_gap;
-                let pills_start = right_rect.center().x - pills_w * 0.5;
-                let repeat_rect = egui::Rect::from_min_size(
-                    egui::pos2(pills_start, pill_y),
-                    egui::vec2(repeat_w, pill_h),
-                );
-                let shuffle_rect = egui::Rect::from_min_size(
-                    egui::pos2(pills_start + repeat_w + pill_gap, pill_y),
-                    egui::vec2(shuffle_w, pill_h),
-                );
-                let repeat_label = match self.repeat_mode {
-                    RepeatMode::Off => REPEAT_LABEL,
-                    RepeatMode::All => REPEAT_ALL_LABEL,
-                    RepeatMode::One => REPEAT_ONE_LABEL,
-                };
-                if pill_toggle(
-                    ui,
-                    repeat_rect,
-                    "bottom.repeat",
-                    repeat_label,
-                    self.repeat_mode != RepeatMode::Off,
-                    REPEAT_TOOLTIP,
-                ) {
-                    self.repeat_mode = self.repeat_mode.next();
-                    storage::save_repeat(self.repeat_mode.as_str());
-                }
-                if pill_toggle(
-                    ui,
-                    shuffle_rect,
-                    "bottom.shuffle",
-                    SHUFFLE_LABEL,
-                    self.shuffle,
-                    SHUFFLE_TOOLTIP,
-                ) {
-                    self.toggle_shuffle();
-                }
 
                 let mut status_parts: Vec<String> = Vec::new();
                 if !self.hotkey_status.is_empty() {
@@ -3428,6 +3393,7 @@ impl eframe::App for GuiAppImpl {
                     let filter_before = self.my_filter.clone();
                     let mut filter_rect = egui::Rect::NOTHING;
                     ui.horizontal(|ui| {
+                        ui.add_space(LIST_SIDE_INSET);
                         let field_w = (ui.available_width() - 120.0).max(160.0);
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(field_w, 28.0), egui::Sense::hover());
                         filter_rect = rect;
@@ -3458,14 +3424,13 @@ impl eframe::App for GuiAppImpl {
                     let total = if filter_active { self.my_filter_cache.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
                     let count_text = format!("{} {}", total, tracks_word(total as u64));
                     let count_w = measure_label_width(ui, &count_text, theme::mono_font(12.0));
-                    let count_x = ui.available_rect_before_wrap().max.x - 12.0 - count_w;
-                    ui.painter().text(
-                        egui::pos2(count_x, filter_rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        count_text,
-                        theme::mono_font(12.0),
-                        theme::MUTED,
+                    let count_rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.available_rect_before_wrap().max.x - LIST_SIDE_INSET - count_w, filter_rect.center().y - 14.0),
+                        egui::vec2(count_w + 2.0, 28.0),
                     );
+                    let mut count_ui = ui.new_child(egui::UiBuilder::new().max_rect(count_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                    count_ui.set_min_height(28.0);
+                    count_ui.add(egui::Label::new(egui::RichText::new(count_text).font(theme::mono_font(12.0)).color(theme::MUTED)).selectable(false));
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     let list_rect = ui.available_rect_before_wrap();
                     let first_page = self.tracks.is_empty() && (self.loading_tracks || self.tracks_count.is_none());
@@ -3569,7 +3534,7 @@ impl eframe::App for GuiAppImpl {
                                     let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
                                     let cover_size = 36.0;
                                     let (cover_rect, _) = row_ui.allocate_exact_size(egui::vec2(cover_size, cover_size), egui::Sense::hover());
-                                    self.paint_cover(&row_ui, cover_rect, pl.cover_small.as_deref());
+                                    self.paint_cover(&row_ui, cover_rect, pl.cover_small.as_deref(), false);
                                     row_ui.add(egui::Label::new(line).selectable(false).truncate());
                                     if resp.clicked() { self.open_playlist(i); }
                                 }
