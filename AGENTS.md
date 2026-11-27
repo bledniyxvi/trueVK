@@ -18,10 +18,11 @@ Path: C:\dev\vkmusic. Shell: PowerShell on Windows 11. The user writes in Russia
 
 ## Files
 - src/main.rs: entry point only. No CLI flags and no probe modes: any launch starts the GUI. Named WinAPI mutex guards a single instance; a second launch notifies the first over local TCP port 47613. Logs live in %APPDATA%\vkmusic and are trimmed at startup and every 200 writes.
-- src/api.rs: VK API client, Track model (owner_id, id, access_key, identity()), typed VkApiError, auth detection by error code 5/15, token extraction, output sanitizing.
+- src/api.rs: VK API client, Track model (owner_id, id, access_key, identity()), typed VkApiError, auth detection by error code 5/15, token extraction, output sanitizing. Track and Playlist carry optional cover_small / cover_medium URLs parsed from `album.thumb` (tracks) and `photo` (playlists): photo_135 -> photo_68 -> photo_270 for small, photo_300 -> photo_270 -> photo_135 for medium. Flat cover_small/cover_medium keys are also accepted when reading cache.json.
 - src/player.rs: asynchronous download + playback worker (rodio). Network download runs in its own cancellable thread, so Stop/Pause/Seek/next never wait for it. One dedicated preload worker coalesces preload requests. mpsc commands/events, generation counter against stale events, seekable decoder via SharedBytes, quadratic volume curve, 40 ms fades, output recovery by recreating the sink, SaveCurrent writes playing bytes to a chosen path.
-- src/gui.rs: eframe/egui app: tabs, lists, bottom panel, queue logic, tray, hotkeys, context menu ("Похожие треки", "Сохранить MP3").
-- src/storage.rs: Credential Manager (keyring) for token+UA; %APPDATA%\vkmusic\settings.json for volume, last track, repeat/shuffle and window geometry; cache.json for track/playlist metadata. Atomic settings write, corrupt file backed up as .json.bak. No secrets, no URLs in settings.json.
+- src/covers.rs: RAM-only cover art loader. Two worker threads share an mpsc queue (dedup by URL via CoverCache), download with reqwest blocking, decode with image (jpeg/png) and convert to egui::ColorImage off the UI thread. CoverCache is an LRU of at most 90 ready TextureHandles with Loading/Ready/Failed slots; failed URLs are not retried. No disk cache, no temp files. Results return as UiEvent::CoverLoaded and only then request_repaint.
+- src/gui.rs: eframe/egui app: tabs, lists, bottom panel, queue logic, tray, hotkeys, context menu ("Похожие треки", "Сохранить MP3"). Track rows show a 36x36 cover, the bottom panel a 56x56 cover; themed placeholder while loading or when absent.
+- src/storage.rs: Credential Manager (keyring) for token+UA; %APPDATA%\vkmusic\settings.json for volume, last track, repeat/shuffle and window geometry; cache.json for track/playlist metadata (including cover URLs). Atomic settings write, corrupt file backed up as .json.bak. No secrets, no URLs in settings.json.
 
 ## Architecture rules
 - App::logic runs on EVERY pass, including when the window is minimized/hidden (eframe logic-only branch). ALL non-drawing event handling lives there (handle_events: player events, Ended -> next track, media keys, tray events, network results, restore of last track). ui() only draws and reads input. Never move event handling back into ui().
@@ -35,6 +36,7 @@ Path: C:\dev\vkmusic. Shell: PowerShell on Windows 11. The user writes in Russia
 - Audio output failures and default-device changes are recovered by opening a new sink and seeking to the last position; the track must not silently die.
 - "Похожие треки" sets rec_target and loads recommendations with target_audio={owner_id}_{id}; the normal Recommendations refresh clears rec_target.
 - Hotkeys Space and Ctrl+Left/Right must not fire while a text field has focus.
+- Cover art is lazy: request only for visible rows and the current track. Do not start new cover requests while the window is hidden or minimized. Cover URLs are never logged and never written to settings.json (cache.json is allowed).
 
 ## VK facts (verified)
 - Host https://api.vk.ru/method/, v 5.207, User-Agent from VK_UA (default Android UA: VKAndroidApp/8.154-99999 (Android 12; SDK 32; arm64-v8a; Pixel 6; ru; 2960x1440)).
@@ -42,12 +44,13 @@ Path: C:\dev\vkmusic. Shell: PowerShell on Windows 11. The user writes in Russia
 - audio.getRecommendations: use count=50. offset does NOT work (returns 0 items). Each call returns a partly new set (~30-50% overlap). Response has only `count` and `items`. Dedupe by (owner_id, audio_id). target_audio={owner_id}_{id} was requested for "Похожие треки"; it is not independently verified against VK docs.
 - Track `url` is a plain mp3 (~5-10 MB, Range supported). It expires, so fetch a fresh url via audio.getById before playing a saved track. Ignore HLS/DASH/AAC/FLAC streams. Some tracks have no url (restricted): grey them out.
 - audio.add / audio.delete parameter names came from the VkNet library (not VK docs). access_key for audio.add was added by us, not confirmed.
+- Cover art: track `album.thumb` and playlist `photo` objects with photo_68/135/270/300 are used as requested; not independently verified against VK docs.
 
 ## Dependencies (current)
-anyhow, eframe 0.37.0 (glow, default_fonts, clipboard), keyring 4.2.0 (v1, windows-native-keyring-store), reqwest 0.13.5 (blocking, json, rustls), rodio 0.23.0 (playback, mp3), serde, serde_json, global-hotkey 0.10.0, tray-icon 0.26.1 (pulls muda). No windows-sys.
+anyhow, eframe 0.37.0 (glow, default_fonts, clipboard), keyring 4.2.0 (v1, windows-native-keyring-store), reqwest 0.13.5 (blocking, json, rustls), rodio 0.23.0 (playback, mp3), serde, serde_json, global-hotkey 0.10.0, tray-icon 0.26.1 (pulls muda), image 0.25.10 (default-features = false; jpeg, png). No windows-sys.
 
 ## Stages
-Done: 1 CLI, 1.5 probes, 2a play from RAM, 3a GUI skeleton, 3b queue/volume/seek, UI layout, 3d saved login + volume, 3c playlists and search, add/remove music ("+" and "×" with confirmation), 3e recommendations tab, 4a media keys + last track, 4b tray, 4c single instance/shuffle/repeat/filter/tray tooltip, 5 async cancellable player + code-based auth errors + reliable single instance + tests, 6 sound polish (volume curve, fades, device recovery), similar tracks, save MP3, log/monitor/font optimizations.
+Done: 1 CLI, 1.5 probes, 2a play from RAM, 3a GUI skeleton, 3b queue/volume/seek, UI layout, 3d saved login + volume, 3c playlists and search, add/remove music ("+" and "×" with confirmation), 3e recommendations tab, 4a media keys + last track, 4b tray, 4c single instance/shuffle/repeat/filter/tray tooltip, 5 async cancellable player + code-based auth errors + reliable single instance + tests, 6 sound polish (volume curve, fades, device recovery), similar tracks, save MP3, log/monitor/font optimizations, VK track and playlist cover art (RAM-only LRU).
 Next: final polish: texts and colors in one place, look of "+" and "×", English "Log out" label to Russian, window/tray/exe icon, hide the console window, CS2 resource measurement.
 
 ## Diagnostics

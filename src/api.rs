@@ -70,6 +70,8 @@ pub struct Track {
     pub duration_secs: Option<u64>,
     pub url: Option<String>,
     pub audio_streams: Option<Value>,
+    pub cover_small: Option<String>,
+    pub cover_medium: Option<String>,
 }
 
 impl Track {
@@ -78,6 +80,7 @@ impl Track {
             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
             _ => None,
         };
+        let thumb = item.get("album").and_then(|album| album.get("thumb"));
         Self {
             owner_id: item.get("owner_id").and_then(Value::as_i64).unwrap_or(0),
             id: item.get("id").and_then(Value::as_i64).unwrap_or(0),
@@ -87,6 +90,10 @@ impl Track {
             duration_secs: duration_secs(item, "duration"),
             url: item.get("url").and_then(Value::as_str).map(|s| s.to_string()),
             audio_streams: item.get("audio_streams").cloned(),
+            cover_small: thumb.and_then(|t| thumb_url(t, &["photo_135", "photo_68", "photo_270"]))
+                .or_else(|| flat_url(item, "cover_small")),
+            cover_medium: thumb.and_then(|t| thumb_url(t, &["photo_300", "photo_270", "photo_135"]))
+                .or_else(|| flat_url(item, "cover_medium")),
         }
     }
 
@@ -102,6 +109,8 @@ pub struct Playlist {
     pub access_key: Option<String>,
     pub title: String,
     pub count: Option<u64>,
+    pub cover_small: Option<String>,
+    pub cover_medium: Option<String>,
 }
 
 impl Playlist {
@@ -117,7 +126,26 @@ impl Playlist {
             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
             _ => None,
         };
-        Some(Self { owner_id, id, access_key, title, count })
+        let photo = item.get("photo");
+        let cover_small = photo.and_then(|p| thumb_url(p, &["photo_135", "photo_68", "photo_270"]))
+            .or_else(|| flat_url(item, "cover_small"));
+        let cover_medium = photo.and_then(|p| thumb_url(p, &["photo_300", "photo_270", "photo_135"]))
+            .or_else(|| flat_url(item, "cover_medium"));
+        Some(Self { owner_id, id, access_key, title, count, cover_small, cover_medium })
+    }
+}
+
+fn thumb_url(container: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| match container.get(*key) {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        _ => None,
+    })
+}
+
+fn flat_url(item: &Value, key: &str) -> Option<String> {
+    match item.get(key) {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        _ => None,
     }
 }
 
@@ -313,7 +341,41 @@ pub fn extract_access_token(input: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_access_token, redact_urls};
+    use super::{extract_access_token, redact_urls, Track};
+
+    #[test]
+    fn parses_track_covers_from_album_thumb() {
+        let item = serde_json::json!({
+            "owner_id": 1,
+            "id": 2,
+            "artist": "A",
+            "title": "T",
+            "album": {
+                "thumb": {
+                    "photo_68": "http://s68",
+                    "photo_135": "http://s135",
+                    "photo_270": "http://m270",
+                    "photo_300": "http://m300"
+                }
+            }
+        });
+        let track = Track::from_value(&item);
+        assert_eq!(track.cover_small.as_deref(), Some("http://s135"));
+        assert_eq!(track.cover_medium.as_deref(), Some("http://m300"));
+    }
+
+    #[test]
+    fn parses_track_without_album_thumb() {
+        let item = serde_json::json!({
+            "owner_id": 1,
+            "id": 2,
+            "artist": "A",
+            "title": "T"
+        });
+        let track = Track::from_value(&item);
+        assert_eq!(track.cover_small, None);
+        assert_eq!(track.cover_medium, None);
+    }
 
     #[test]
     fn extracts_token_from_query_url() {

@@ -1678,6 +1678,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -3839,6 +3841,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "global-hotkey",
+ "image",
  "keyring",
  "reqwest",
  "rodio",

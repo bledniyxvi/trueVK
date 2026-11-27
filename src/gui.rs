@@ -1,4 +1,5 @@
 use crate::api::{self, AudioGetResponse, Track, DEFAULT_ANDROID_UA};
+use crate::covers;
 use crate::player::{PlayerCmd, PlayerEvent};
 use crate::storage;
 use crate::theme;
@@ -8,6 +9,7 @@ use tray_icon::{Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const FILTER_AUTOLOAD_ERROR_TEXT: &str = "\u{0410}\u{0432}\u{0442}\u{043E}\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0437}\u{043A}\u{0430}: \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}";
@@ -193,11 +195,21 @@ struct PlaylistView {
     access_key: Option<String>,
     title: String,
     count: Option<u64>,
+    cover_small: Option<String>,
+    cover_medium: Option<String>,
 }
 
 impl PlaylistView {
     fn from_api(p: api::Playlist) -> Self {
-        Self { owner_id: p.owner_id, id: p.id, access_key: p.access_key, title: p.title, count: p.count }
+        Self {
+            owner_id: p.owner_id,
+            id: p.id,
+            access_key: p.access_key,
+            title: p.title,
+            count: p.count,
+            cover_small: p.cover_small,
+            cover_medium: p.cover_medium,
+        }
     }
 }
 
@@ -773,6 +785,7 @@ enum UiEvent {
     RestoredTrackUnavailable(String),
     MyUserId(i64),
     LoadError { source: LoadErrorSource, msg: String, auth: bool },
+    CoverLoaded { url: String, image: Option<egui::ColorImage> },
 }
 struct GuiAppImpl {
     cmd_tx: Sender<PlayerCmd>,
@@ -874,6 +887,9 @@ struct GuiAppImpl {
     shuffle_rng: Xorshift64,
     shuffle_queue_key_state: Option<ShuffleQueueKey>,
     cjk_font_loaded: bool,
+    cover_cache: covers::CoverCache,
+    cover_tx: Sender<String>,
+    cover_seq: u64,
 }
 
 fn make_tray_icon() -> anyhow::Result<TrayIconImage> {
@@ -897,6 +913,29 @@ impl GuiAppImpl {
         let ua_val = ua.unwrap_or_else(|| DEFAULT_ANDROID_UA.to_string());
         let volume = storage::load_volume().clamp(0.0, 1.0);
         let shuffle = storage::load_shuffle();
+        let (cover_tx, cover_rx) = std::sync::mpsc::channel::<String>();
+        let cover_rx = Arc::new(Mutex::new(cover_rx));
+        for _ in 0..2 {
+            let cover_rx = cover_rx.clone();
+            let cover_events = ui_evt_tx.clone();
+            let cover_ctx = egui_ctx.clone();
+            let cover_ua = ua_val.clone();
+            std::thread::spawn(move || {
+                let Some(client) = covers::build_client(&cover_ua) else { return; };
+                loop {
+                    let url = match cover_rx.lock() {
+                        Ok(guard) => match guard.recv() {
+                            Ok(url) => url,
+                            Err(_) => break,
+                        },
+                        Err(_) => break,
+                    };
+                    let image = covers::load_cover(&client, &url);
+                    let _ = cover_events.send(UiEvent::CoverLoaded { url, image });
+                    cover_ctx.request_repaint();
+                }
+            });
+        }
         let mut app = Self {
             cmd_tx,
             evt_rx,
@@ -984,6 +1023,8 @@ impl GuiAppImpl {
                 id: t.audio_id,
                 access_key: t.access_key,
                 audio_streams: None,
+                cover_small: None,
+                cover_medium: None,
             }),
             restored_track_pending: false,
             _tray_icon: None,
@@ -1006,6 +1047,9 @@ impl GuiAppImpl {
             shuffle_rng: Xorshift64::from_time(),
             shuffle_queue_key_state: None,
             cjk_font_loaded: false,
+            cover_cache: covers::CoverCache::new(90),
+            cover_tx,
+            cover_seq: 0,
         };
         let _ = app.cmd_tx.send(PlayerCmd::SetVolume(app.volume));
         app.register_media_hotkeys();
@@ -1044,6 +1088,7 @@ impl GuiAppImpl {
         let tracks: Vec<serde_json::Value> = self.tracks.iter().take(100).map(|t| serde_json::json!({
             "owner_id": t.owner_id, "id": t.id, "access_key": t.access_key,
             "artist": t.artist, "title": t.title, "duration": t.duration_secs,
+            "cover_small": t.cover_small, "cover_medium": t.cover_medium,
         })).collect();
         cache["tracks"] = serde_json::Value::Array(tracks);
         cache["tracks_count"] = serde_json::json!(self.tracks_count);
@@ -1055,6 +1100,7 @@ impl GuiAppImpl {
         let playlists: Vec<serde_json::Value> = self.playlists.iter().take(100).map(|p| serde_json::json!({
             "owner_id": p.owner_id, "id": p.id, "access_key": p.access_key,
             "title": p.title, "count": p.count,
+            "cover_small": p.cover_small, "cover_medium": p.cover_medium,
         })).collect();
         cache["playlists"] = serde_json::Value::Array(playlists);
         cache["playlists_count"] = serde_json::json!(self.playlists_count);
@@ -2163,7 +2209,18 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         self.rec_status = msg;
                     }
                 }
-                                UiEvent::MediaKey(kind) => {
+                UiEvent::CoverLoaded { url, image } => {
+                    match image {
+                        Some(image) => {
+                            self.cover_seq = self.cover_seq.wrapping_add(1);
+                            let name = format!("cover{}", self.cover_seq);
+                            let texture = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+                            self.cover_cache.insert_ready(url, texture);
+                        }
+                        None => self.cover_cache.mark_failed(&url),
+                    }
+                }
+                UiEvent::MediaKey(kind) => {
                     self.handle_media_hotkey(kind);
                 }
                 UiEvent::TrayClick(MouseButton::Left, MouseButtonState::Up) => {
@@ -2318,7 +2375,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                         let t = self.queue.iter().find(|t| TrackId::from_track(t) == tid).cloned()
                             .or_else(|| self.tracks.iter().find(|t| TrackId::from_track(t) == tid).cloned())
                             .or_else(|| self.restored_track.clone().filter(|t| TrackId::from_track(t) == tid));
-                        let save_t = t.unwrap_or_else(|| Track { artist: artist.clone(), title: title.clone(), duration_secs, url: None, owner_id: tid.owner_id, id: tid.id, access_key: None, audio_streams: None });
+                        let save_t = t.unwrap_or_else(|| Track { artist: artist.clone(), title: title.clone(), duration_secs, url: None, owner_id: tid.owner_id, id: tid.id, access_key: None, audio_streams: None, cover_small: None, cover_medium: None });
                         self.restored_track = Some(save_t.clone());
                         self.save_last_played_track(&save_t);
                     }
@@ -2561,7 +2618,57 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             duration_secs: src.duration_secs,
             url: src.url.clone(),
             audio_streams: None,
+            cover_small: src.cover_small.clone(),
+            cover_medium: src.cover_medium.clone(),
         })
+    }
+
+    fn request_cover(&mut self, url: Option<&str>) {
+        let Some(url) = url else { return; };
+        let url = url.trim();
+        if url.is_empty() || self.window_hidden { return; }
+        let minimized = self.egui_ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if minimized { return; }
+        if !self.cover_cache.needs_request(url) { return; }
+        self.cover_cache.mark_loading(url);
+        let _ = self.cover_tx.send(url.to_string());
+    }
+
+    fn paint_cover(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<&str>) {
+        self.request_cover(url);
+        let texture = url.and_then(|url| self.cover_cache.texture(url));
+        if let Some(texture) = texture {
+            egui::Image::new(&texture)
+                .fit_to_exact_size(rect.size())
+                .corner_radius(egui::CornerRadius::same(6))
+                .paint_at(ui, rect);
+        } else {
+            let corner = egui::CornerRadius::same(6);
+            ui.painter().rect_filled(rect, corner, theme::SURFACE);
+            ui.painter().rect_stroke(
+                rect,
+                corner,
+                egui::Stroke::new(1.0, theme::BORDER),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+
+    fn current_cover_medium(&self) -> Option<String> {
+        let tid = self.now_playing.as_ref().and_then(|np| np.track_id)
+            .or_else(|| self.restored_track.as_ref().map(TrackId::from_track));
+        if let Some(tid) = tid {
+            if let Some(t) = self.restored_track.as_ref().filter(|t| TrackId::from_track(t) == tid) {
+                if t.cover_medium.is_some() { return t.cover_medium.clone(); }
+            }
+            if let Some(t) = self.queue.iter().find(|t| TrackId::from_track(t) == tid) {
+                if t.cover_medium.is_some() { return t.cover_medium.clone(); }
+            }
+            if let Some(t) = self.tracks.iter().find(|t| TrackId::from_track(t) == tid) {
+                if t.cover_medium.is_some() { return t.cover_medium.clone(); }
+            }
+        }
+        self.restored_track.as_ref().and_then(|t| t.cover_medium.clone())
     }
 
     fn render_track_row(&mut self, ui: &mut egui::Ui, i: usize, width: f32, row_h: f32, source: QueueSource, playing_in_this_list: bool) {
@@ -2595,7 +2702,9 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         }
 
         let inner = rect.shrink2(egui::vec2(10.0, 0.0));
-        let left_w = 44.0;
+        let cover_size = 36.0;
+        let cover_gap = 8.0;
+        let index_w = 24.0;
         let duration_w = 52.0;
         let action_w = if delete_confirm { 170.0 } else { 52.0 };
         let action_gap = 8.0;
@@ -2609,10 +2718,17 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             egui::pos2(action_right - action_w, rect.min.y),
             egui::vec2(action_w, row_h),
         );
-        let text_min_x = inner.min.x + left_w + text_gap;
+        let cover_rect = egui::Rect::from_center_size(
+            egui::pos2(inner.min.x + cover_size * 0.5, rect.center().y),
+            egui::vec2(cover_size, cover_size),
+        );
+        let index_left = inner.min.x + cover_size + cover_gap;
+        let text_min_x = index_left + index_w + text_gap;
         let text_w = (action_rect.min.x - text_gap - text_min_x).max(40.0);
-        let left_rect = egui::Rect::from_min_size(inner.min, egui::vec2(left_w, row_h));
+        let left_rect = egui::Rect::from_min_size(egui::pos2(index_left, rect.min.y), egui::vec2(index_w, row_h));
         let text_rect = egui::Rect::from_min_size(egui::pos2(text_min_x, rect.min.y), egui::vec2(text_w, row_h));
+
+        self.paint_cover(ui, cover_rect, track.cover_small.as_deref());
 
         let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         left_ui.set_min_height(row_h);
@@ -2999,7 +3115,19 @@ impl eframe::App for GuiAppImpl {
                 };
                 self.ensure_cjk_font(ui.ctx(), &title);
                 self.ensure_cjk_font(ui.ctx(), &artist);
-                let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
+                let cover_size = 56.0;
+                let cover_rect = egui::Rect::from_min_size(
+                    egui::pos2(left_rect.min.x, left_rect.min.y + (PANEL_ZONES_H - cover_size) * 0.5),
+                    egui::vec2(cover_size, cover_size),
+                );
+                let current_cover = self.current_cover_medium();
+                self.paint_cover(ui, cover_rect, current_cover.as_deref());
+                let text_left = cover_rect.max.x + 12.0;
+                let text_rect = egui::Rect::from_min_size(
+                    egui::pos2(text_left, left_rect.min.y),
+                    egui::vec2((left_rect.max.x - text_left).max(40.0), PANEL_ZONES_H),
+                );
+                let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
                 left_ui.set_min_height(PANEL_ZONES_H);
                 left_ui.add_space(1.0);
                 left_ui.add(
@@ -3392,6 +3520,9 @@ impl eframe::App for GuiAppImpl {
                                     if resp.hovered() { ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill); }
                                     let inner = rect.shrink2(egui::vec2(8.0, 0.0));
                                     let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                                    let cover_size = 36.0;
+                                    let (cover_rect, _) = row_ui.allocate_exact_size(egui::vec2(cover_size, cover_size), egui::Sense::hover());
+                                    self.paint_cover(&row_ui, cover_rect, pl.cover_small.as_deref());
                                     row_ui.add(egui::Label::new(line).selectable(false).truncate());
                                     if resp.clicked() { self.open_playlist(i); }
                                 }
