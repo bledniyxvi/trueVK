@@ -19,37 +19,59 @@ pub fn compute_dominant_color_from_rgba(rgba: &RgbaImage) -> Option<[u8; 3]> {
     if width == 0 || height == 0 {
         return None;
     }
-    let mut r_sum: u32 = 0;
-    let mut g_sum: u32 = 0;
-    let mut b_sum: u32 = 0;
+    let mut r_sum: u64 = 0;
+    let mut g_sum: u64 = 0;
+    let mut b_sum: u64 = 0;
+    let mut weight_sum: u64 = 0;
     let mut count: u32 = 0;
     let step = 4usize;
     for y in (0..height as usize).step_by(step) {
         for x in (0..width as usize).step_by(step) {
-            let [r, g, b, _a] = rgba.get_pixel(x as u32, y as u32).0;
-            let sum = r as u32 + g as u32 + b as u32;
-            if sum < 60 || sum > 700 {
+            let [r, g, b, a] = rgba.get_pixel(x as u32, y as u32).0;
+            if a < 128 {
                 continue;
             }
             let max = r.max(g).max(b);
             let min = r.min(g).min(b);
-            if max - min < 25 {
+            let chroma = max - min;
+            if max < 28 || chroma < 16 {
                 continue;
             }
-            r_sum += r as u32;
-            g_sum += g as u32;
-            b_sum += b as u32;
+            let w = chroma as u64;
+            r_sum += r as u64 * w;
+            g_sum += g as u64 * w;
+            b_sum += b as u64 * w;
+            weight_sum += w;
             count += 1;
         }
     }
-    if count < 4 {
+    if count < 4 || weight_sum == 0 {
         return None;
     }
-    Some([
-        (r_sum / count) as u8,
-        (g_sum / count) as u8,
-        (b_sum / count) as u8,
-    ])
+    let mut r = (r_sum / weight_sum) as f32;
+    let mut g = (g_sum / weight_sum) as f32;
+    let mut b = (b_sum / weight_sum) as f32;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    if max <= 1.0 {
+        return None;
+    }
+    let sat = (max - min) / max;
+    if sat < 0.45 && max > min {
+        let factor = 0.55 / sat;
+        r = (max - (max - r) * factor).clamp(0.0, 255.0);
+        g = (max - (max - g) * factor).clamp(0.0, 255.0);
+        b = (max - (max - b) * factor).clamp(0.0, 255.0);
+    }
+    let max2 = r.max(g).max(b);
+    if max2 > 1.0 {
+        let scale = max2.clamp(130.0, 220.0) / max2;
+        r = (r * scale).clamp(0.0, 255.0);
+        g = (g * scale).clamp(0.0, 255.0);
+        b = (b * scale).clamp(0.0, 255.0);
+    }
+    Some([r.round() as u8, g.round() as u8, b.round() as u8])
 }
 
 pub fn load_cover(client: &reqwest::blocking::Client, url: &str) -> Option<(egui::ColorImage, Option<[u8; 3]>)> {
@@ -182,5 +204,12 @@ mod tests {
         assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([0, 0, 0, 255]))).is_none());
         assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([128, 128, 128, 255]))).is_none());
         assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([255, 255, 255, 255]))).is_none());
+    }
+
+    #[test]
+    fn dominant_color_for_pastel_image() {
+        let color = compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([210, 245, 252, 255])))
+            .expect("pastel image should have a dominant color");
+        assert!(color[2] > color[0]);
     }
 }

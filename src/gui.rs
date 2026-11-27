@@ -35,8 +35,8 @@ const HOTKEY_NAME_NEXT: &str = "\u{0414}\u{0430}\u{043b}\u{0435}\u{0435}";
 const HOTKEY_NAME_PREV: &str = "\u{041d}\u{0430}\u{0437}\u{0430}\u{0434}";
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
-const TRACK_ROW_HEIGHT: f32 = 52.0;
-const LIST_SIDE_INSET: f32 = 6.0;
+const TRACK_ROW_HEIGHT: f32 = 54.0;
+const LIST_SIDE_INSET: f32 = 10.0;
 const ADD_TRACK_TOOLTIP: &str = "\u{0414}\u{043E}\u{0431}\u{0430}\u{0432}\u{0438}\u{0442}\u{044C} \u{0432} \u{043C}\u{043E}\u{044E} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0443}";
 const REMOVE_TRACK_TOOLTIP: &str = "\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}";
 const NOTHING_PLAYING_TEXT: &str = "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}";
@@ -50,6 +50,7 @@ const UNMUTE_TOOLTIP: &str = "\u{0412}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u
 const MENU_TOOLTIP: &str = "\u{041C}\u{0435}\u{043D}\u{044E}";
 const LOGOUT_LABEL: &str = "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}";
 const FILTER_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{043F}\u{043E} \u{043C}\u{043E}\u{0435}\u{0439} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0435}";
+const SEARCH_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432} \u{0432} VK";
 
 fn tracks_word(n: u64) -> &'static str {
     let mod10 = n % 10;
@@ -79,13 +80,7 @@ const TOP_BAR_H: f32 = 44.0;
 const TOP_TAB_GAP: f32 = 22.0;
 const TOP_MENU_SIZE: f32 = 28.0;
 const PANEL_MARGIN_X: f32 = 14.0;
-const PANEL_BOTTOM_MARGIN: f32 = 8.0;
-const PANEL_PROGRESS_HIT_H: f32 = 12.0;
-const PANEL_ZONES_H: f32 = 64.0;
-const PANEL_CENTER_W: f32 = 220.0;
-const PANEL_RIGHT_W: f32 = 200.0;
-const PANEL_ZONE_GAP: f32 = 2.0;
-const PANEL_HEIGHT: f32 = 88.0;
+const PANEL_HEIGHT: f32 = 90.0;
 const LOGIN_OPEN_LABEL: &str = "\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}";
 const LOGIN_COPY_LABEL: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}";
 const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{438}\u{442}\u{44c}";
@@ -261,16 +256,36 @@ enum ModeIcon {
     RepeatOne,
 }
 
-fn paint_bar(painter: &egui::Painter, x0: f32, x1: f32, y: f32, fraction: f32, thickness: f32, handle: bool) {
+fn paint_bar(
+    painter: &egui::Painter,
+    x0: f32,
+    x1: f32,
+    y: f32,
+    fraction: f32,
+    thickness: f32,
+    fill_color: egui::Color32,
+    handle: bool,
+) {
     if x1 <= x0 { return; }
     let value = fraction.clamp(0.0, 1.0);
     let fill_x = x0 + (x1 - x0) * value;
-    painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], egui::Stroke::new(thickness, theme::BORDER));
+    let half = thickness * 0.5;
+    let r = egui::CornerRadius::same((half.ceil() as u8).max(1));
+    painter.rect_filled(
+        egui::Rect::from_min_max(egui::pos2(x0, y - half), egui::pos2(x1, y + half)),
+        r,
+        egui::Color32::from_white_alpha(26),
+    );
     if value > 0.0 {
-        painter.line_segment([egui::pos2(x0, y), egui::pos2(fill_x, y)], egui::Stroke::new(thickness, theme::ACCENT));
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x0, y - half), egui::pos2(fill_x.max(x0 + thickness), y + half)),
+            r,
+            fill_color,
+        );
     }
     if handle {
-        painter.circle_filled(egui::pos2(fill_x, y), 5.0, theme::ACCENT);
+        painter.circle_filled(egui::pos2(fill_x, y), 6.0, egui::Color32::from_black_alpha(90));
+        painter.circle_filled(egui::pos2(fill_x, y), 4.8, egui::Color32::from_rgb(0xF5, 0xF5, 0xF7));
     }
 }
 
@@ -279,7 +294,34 @@ fn accent_rgb() -> [u8; 3] {
     [r, g, b]
 }
 
-fn draw_corner_glow(painter: &egui::Painter, rect: egui::Rect, color: [u8; 3], alpha: u8) {
+fn draw_ambient_wash(painter: &egui::Painter, rect: egui::Rect, color: [u8; 3], top_left_alpha: u8, bottom_left_alpha: u8) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 { return; }
+    let make = |pos: egui::Pos2, a: u8| {
+        let scale = a as u32;
+        egui::epaint::Vertex {
+            pos,
+            uv: egui::pos2(0.0, 0.0),
+            color: egui::Color32::from_rgba_premultiplied(
+                (color[0] as u32 * scale / 255) as u8,
+                (color[1] as u32 * scale / 255) as u8,
+                (color[2] as u32 * scale / 255) as u8,
+                a,
+            ),
+        }
+    };
+    let fade_x = rect.min.x + rect.width() * 0.72;
+    let mut mesh = egui::Mesh::with_texture(egui::TextureId::default());
+    mesh.vertices = vec![
+        make(rect.left_top(), top_left_alpha),
+        make(egui::pos2(fade_x, rect.min.y), 0),
+        make(rect.left_bottom(), bottom_left_alpha),
+        make(egui::pos2(fade_x, rect.max.y), 0),
+    ];
+    mesh.indices = vec![0, 1, 2, 1, 3, 2];
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+fn draw_top_glow(painter: &egui::Painter, rect: egui::Rect, color: [u8; 3], alpha: u8) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 { return; }
     let make = |pos: egui::Pos2, a: u8| {
         let scale = a as u32;
@@ -297,7 +339,7 @@ fn draw_corner_glow(painter: &egui::Painter, rect: egui::Rect, color: [u8; 3], a
     let mut mesh = egui::Mesh::with_texture(egui::TextureId::default());
     mesh.vertices = vec![
         make(rect.left_top(), alpha),
-        make(rect.right_top(), 0),
+        make(rect.right_top(), alpha / 3),
         make(rect.left_bottom(), 0),
         make(rect.right_bottom(), 0),
     ];
@@ -367,45 +409,33 @@ fn draw_skeleton_rows(ui: &mut egui::Ui, rect: egui::Rect, row_h: f32) {
     let painter = ui.painter_at(rect);
     let widths = [0.42, 0.55, 0.34, 0.48, 0.30, 0.52, 0.38, 0.50, 0.33];
     let sub_widths = [0.24, 0.27, 0.21, 0.26, 0.20, 0.30, 0.23, 0.25, 0.22];
-    let radius = egui::CornerRadius::same(4);
-    let inset = LIST_SIDE_INSET;
+    let radius = egui::CornerRadius::same(6);
+    let cover_left = rect.min.x + LIST_SIDE_INSET + 12.0;
     let cover_size = 40.0;
-    let cover_gap = 12.0;
-    let duration_w = 52.0;
-    let text_left = rect.min.x + inset + cover_size + cover_gap;
-    let text_w = (rect.width() - inset * 2.0 - cover_size - cover_gap - duration_w - 12.0).max(80.0);
+    let duration_right = rect.max.x - LIST_SIDE_INSET - 12.0;
+    let duration_w = 44.0;
+    let text_left = cover_left + cover_size + 12.0;
+    let text_w = (duration_right - duration_w - 16.0 - text_left).max(80.0);
     for i in 0..9 {
         let cy = rect.min.y + row_h * (i as f32) + row_h * 0.5;
         painter.rect_filled(
-            egui::Rect::from_center_size(
-                egui::pos2(rect.min.x + inset + cover_size * 0.5, cy),
-                egui::vec2(cover_size, cover_size),
-            ),
+            egui::Rect::from_center_size(egui::pos2(cover_left + cover_size * 0.5, cy), egui::vec2(cover_size, cover_size)),
             radius,
             theme::SURFACE,
         );
         painter.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(text_left, cy - 10.0),
-                egui::vec2(text_w * widths[i % widths.len()], 10.0),
-            ),
-            radius,
+            egui::Rect::from_min_size(egui::pos2(text_left, cy - 11.0), egui::vec2(text_w * widths[i % widths.len()], 10.0)),
+            egui::CornerRadius::same(4),
             theme::SURFACE,
         );
         painter.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(text_left, cy + 6.0),
-                egui::vec2(text_w * sub_widths[i % sub_widths.len()], 8.0),
-            ),
-            radius,
+            egui::Rect::from_min_size(egui::pos2(text_left, cy + 5.0), egui::vec2(text_w * sub_widths[i % sub_widths.len()], 8.0)),
+            egui::CornerRadius::same(4),
             theme::SURFACE,
         );
         painter.rect_filled(
-            egui::Rect::from_center_size(
-                egui::pos2(rect.max.x - inset - duration_w * 0.5, cy),
-                egui::vec2(duration_w, 8.0),
-            ),
-            radius,
+            egui::Rect::from_center_size(egui::pos2(duration_right - duration_w * 0.5, cy), egui::vec2(duration_w, 8.0)),
+            egui::CornerRadius::same(4),
             theme::SURFACE,
         );
     }
@@ -570,20 +600,15 @@ fn draw_playing_marker(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
     let painter = ui.painter();
     let center = rect.center();
     if paused {
-        let bar_w = 3.0;
-        let bar_h = 14.0;
-        let gap = 6.0;
-        for dx in [-gap * 0.5, gap * 0.5] {
-            let bar = egui::Rect::from_center_size(
-                egui::pos2(center.x + dx, center.y),
-                egui::vec2(bar_w, bar_h),
-            );
-            painter.rect_filled(bar, egui::CornerRadius::same(1), theme::ACCENT_DIM);
+        let color = egui::Color32::from_white_alpha(200);
+        for dx in [-3.5, 3.5] {
+            let bar = egui::Rect::from_center_size(egui::pos2(center.x + dx, center.y), egui::vec2(3.0, 13.0));
+            painter.rect_filled(bar, egui::CornerRadius::same(1), color);
         }
         return;
     }
     let bar_w = 3.0;
-    let gap = 4.0;
+    let gap = 3.5;
     let heights = [9.0, 15.0, 11.0];
     let total_w = heights.len() as f32 * bar_w + (heights.len() as f32 - 1.0) * gap;
     let start_x = center.x - total_w * 0.5;
@@ -592,7 +617,7 @@ fn draw_playing_marker(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
             egui::pos2(start_x + bar_w * 0.5 + i as f32 * (bar_w + gap), center.y),
             egui::vec2(bar_w, *h),
         );
-        painter.rect_filled(bar, egui::CornerRadius::same(1), theme::ACCENT);
+        painter.rect_filled(bar, egui::CornerRadius::same(1), egui::Color32::WHITE);
     }
 }
 
@@ -603,16 +628,31 @@ fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: Transpo
     let center = rect.center();
     let is_primary = matches!(icon, TransportIcon::Play | TransportIcon::Pause);
     if is_primary {
-        let fill = if enabled { theme::ACCENT } else { theme::ACCENT_DIM };
-        painter.circle_filled(center, rect.width() * 0.5, fill);
+        let fill = if !enabled {
+            theme::SURFACE
+        } else if hovered {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::from_rgb(0xF2, 0xF2, 0xF5)
+        };
+        let r = rect.width() * 0.5 + if hovered { 1.0 } else { 0.0 };
+        painter.circle_filled(center, r, fill);
     } else if hovered {
-        painter.circle_filled(center, rect.width() * 0.5, theme::HOVER);
+        painter.circle_filled(center, rect.width() * 0.5, egui::Color32::from_white_alpha(18));
     }
-    let color = if is_primary && enabled { theme::BG } else if enabled { theme::TEXT } else { theme::MUTED };
+    let color = if is_primary {
+        if enabled { egui::Color32::from_rgb(0x0E, 0x0E, 0x12) } else { theme::MUTED }
+    } else if hovered {
+        egui::Color32::WHITE
+    } else if enabled {
+        egui::Color32::from_rgb(0xD8, 0xD8, 0xDF)
+    } else {
+        theme::MUTED
+    };
     match icon {
         TransportIcon::Prev => {
-            let r = 6.0;
-            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x - r - 2.0, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(0), color);
+            let r = 5.5;
+            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x - r - 2.0, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(1), color);
             painter.add(egui::Shape::convex_polygon(vec![
                 egui::pos2(center.x + r, center.y - r),
                 egui::pos2(center.x + r, center.y + r),
@@ -620,24 +660,24 @@ fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: Transpo
             ], color, egui::Stroke::NONE));
         }
         TransportIcon::Next => {
-            let r = 6.0;
+            let r = 5.5;
             painter.add(egui::Shape::convex_polygon(vec![
                 egui::pos2(center.x - r, center.y - r),
                 egui::pos2(center.x - r, center.y + r),
                 egui::pos2(center.x + r - 1.0, center.y),
             ], color, egui::Stroke::NONE));
-            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x + r, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(0), color);
+            painter.rect_filled(egui::Rect::from_min_size(egui::pos2(center.x + r, center.y - r), egui::vec2(2.0, r * 2.0)), egui::CornerRadius::same(1), color);
         }
         TransportIcon::Play => {
             painter.add(egui::Shape::convex_polygon(vec![
-                egui::pos2(center.x - 5.0, center.y - 7.0),
-                egui::pos2(center.x - 5.0, center.y + 7.0),
-                egui::pos2(center.x + 7.0, center.y),
+                egui::pos2(center.x - 4.0, center.y - 6.8),
+                egui::pos2(center.x - 4.0, center.y + 6.8),
+                egui::pos2(center.x + 7.2, center.y),
             ], color, egui::Stroke::NONE));
         }
         TransportIcon::Pause => {
-            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x - 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
-            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x + 4.0, center.y), egui::vec2(4.0, 16.0)), egui::CornerRadius::same(2), color);
+            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x - 3.6, center.y), egui::vec2(3.6, 13.5)), egui::CornerRadius::same(1), color);
+            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(center.x + 3.6, center.y), egui::vec2(3.6, 13.5)), egui::CornerRadius::same(1), color);
         }
     }
     let resp = resp.on_hover_text(tooltip);
@@ -649,33 +689,64 @@ fn transport_button(ui: &mut egui::Ui, rect: egui::Rect, id: &str, icon: Transpo
 
 fn draw_mode_icon(painter: &egui::Painter, center: egui::Pos2, icon: ModeIcon, active: bool) {
     let color = if active { theme::ACCENT } else { theme::MUTED };
-    let stroke = egui::Stroke::new(1.6, color);
+    let stroke = egui::Stroke::new(1.5, color);
+    let cx = center.x;
+    let cy = center.y;
     match icon {
         ModeIcon::Shuffle => {
-            painter.line(vec![egui::pos2(center.x - 8.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y + 6.0)], stroke);
-            painter.line(vec![egui::pos2(center.x - 8.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y - 6.0)], stroke);
-            painter.line(vec![egui::pos2(center.x + 3.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y + 6.0), egui::pos2(center.x + 8.0, center.y + 1.0)], stroke);
-            painter.line(vec![egui::pos2(center.x + 3.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y - 6.0), egui::pos2(center.x + 8.0, center.y - 1.0)], stroke);
+            painter.line(vec![
+                egui::pos2(cx - 7.0, cy - 4.5),
+                egui::pos2(cx - 3.0, cy - 4.5),
+                egui::pos2(cx + 2.5, cy + 4.5),
+                egui::pos2(cx + 6.5, cy + 4.5),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx - 7.0, cy + 4.5),
+                egui::pos2(cx - 3.0, cy + 4.5),
+                egui::pos2(cx + 2.5, cy - 4.5),
+                egui::pos2(cx + 6.5, cy - 4.5),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx + 4.0, cy - 7.0),
+                egui::pos2(cx + 7.0, cy - 4.5),
+                egui::pos2(cx + 4.0, cy - 2.0),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx + 4.0, cy + 2.0),
+                egui::pos2(cx + 7.0, cy + 4.5),
+                egui::pos2(cx + 4.0, cy + 7.0),
+            ], stroke);
         }
         ModeIcon::Repeat | ModeIcon::RepeatOne => {
-            let l = center.x - 8.0;
-            let r = center.x + 8.0;
-            let t = center.y - 6.0;
-            let b = center.y + 6.0;
-            painter.line(vec![egui::pos2(r - 4.0, t), egui::pos2(l + 4.0, t)], stroke);
-            painter.line(vec![egui::pos2(l + 4.0, t), egui::pos2(l, t + 4.0)], stroke);
-            painter.line(vec![egui::pos2(l, t + 4.0), egui::pos2(l, b - 4.0)], stroke);
-            painter.line(vec![egui::pos2(l, b - 4.0), egui::pos2(l + 4.0, b)], stroke);
-            painter.line(vec![egui::pos2(l + 4.0, b), egui::pos2(r - 4.0, b)], stroke);
-            painter.add(egui::Shape::convex_polygon(vec![
-                egui::pos2(r - 5.0, b - 3.0),
-                egui::pos2(r - 5.0, b + 3.0),
-                egui::pos2(r + 1.0, b),
-            ], color, egui::Stroke::NONE));
+            painter.line(vec![
+                egui::pos2(cx - 6.5, cy - 0.5),
+                egui::pos2(cx - 6.5, cy - 3.0),
+                egui::pos2(cx - 4.5, cy - 4.8),
+                egui::pos2(cx + 6.0, cy - 4.8),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx + 3.5, cy - 7.3),
+                egui::pos2(cx + 6.5, cy - 4.8),
+                egui::pos2(cx + 3.5, cy - 2.3),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx + 6.5, cy + 0.5),
+                egui::pos2(cx + 6.5, cy + 3.0),
+                egui::pos2(cx + 4.5, cy + 4.8),
+                egui::pos2(cx - 6.0, cy + 4.8),
+            ], stroke);
+            painter.line(vec![
+                egui::pos2(cx - 3.5, cy + 2.3),
+                egui::pos2(cx - 6.5, cy + 4.8),
+                egui::pos2(cx - 3.5, cy + 7.3),
+            ], stroke);
             if matches!(icon, ModeIcon::RepeatOne) {
-                painter.text(center + egui::vec2(0.0, -1.0), egui::Align2::CENTER_CENTER, "1", theme::semibold_font(9.0), color);
+                painter.text(egui::pos2(cx, cy), egui::Align2::CENTER_CENTER, "1", theme::semibold_font(8.5), color);
             }
         }
+    }
+    if active {
+        painter.circle_filled(egui::pos2(cx, cy + 10.5), 1.6, theme::ACCENT);
     }
 }
 
@@ -2710,34 +2781,46 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
     fn paint_cover(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<&str>, playing: bool) {
         self.request_cover(url);
         let texture = url.and_then(|url| self.cover_cache.texture(url));
-        let corner = egui::CornerRadius::same(6);
-        let border = egui::Color32::from_white_alpha(18);
+        let corner = egui::CornerRadius::same(7);
         if let Some(texture) = texture {
             egui::Image::new(&texture)
                 .fit_to_exact_size(rect.size())
                 .corner_radius(corner)
                 .paint_at(ui, rect);
         } else {
-            ui.painter().rect_filled(rect, corner, theme::SURFACE);
+            ui.painter().rect_filled(rect, corner, egui::Color32::from_rgb(0x1A, 0x1A, 0x22));
             let cx = rect.center().x;
             let cy = rect.center().y;
-            let r = rect.width().min(rect.height()) * 0.42;
-            let stroke = egui::Stroke::new(2.0, theme::MUTED);
-            ui.painter().circle_stroke(egui::pos2(cx - r * 0.12, cy - r * 0.42), r * 0.34, stroke);
+            let s = rect.width().min(rect.height());
+            let note_color = egui::Color32::from_white_alpha(68);
+            let head = egui::pos2(cx - s * 0.08, cy + s * 0.14);
+            let head_r = s * 0.105;
+            ui.painter().circle_filled(head, head_r, note_color);
+            let stem_x = head.x + head_r - 0.8;
+            let stem_top = cy - s * 0.20;
             ui.painter().line_segment(
-                [egui::pos2(cx + r * 0.22, cy - r * 0.42), egui::pos2(cx + r * 0.22, cy + r * 0.8)],
-                stroke,
+                [egui::pos2(stem_x, head.y), egui::pos2(stem_x, stem_top)],
+                egui::Stroke::new(2.0, note_color),
             );
-            ui.painter().line_segment(
-                [egui::pos2(cx - r * 0.46, cy + r * 0.8), egui::pos2(cx + r * 0.58, cy + r * 0.4)],
-                stroke,
+            ui.painter().line(
+                vec![
+                    egui::pos2(stem_x, stem_top),
+                    egui::pos2(stem_x + s * 0.15, stem_top + s * 0.06),
+                    egui::pos2(stem_x + s * 0.17, stem_top + s * 0.15),
+                ],
+                egui::Stroke::new(2.0, note_color),
             );
         }
         if playing {
-            ui.painter().rect_filled(rect, corner, egui::Color32::from_black_alpha(110));
+            ui.painter().rect_filled(rect, corner, egui::Color32::from_black_alpha(135));
             draw_playing_marker(ui, rect, self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false));
         }
-        ui.painter().rect_stroke(rect, corner, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(
+            rect,
+            corner,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(22)),
+            egui::StrokeKind::Inside,
+        );
     }
 
     fn current_cover_medium(&self) -> Option<String> {
@@ -2776,61 +2859,75 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         if playable && pointer_over_row {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        let corner = egui::CornerRadius::same(6);
-        let card_rect = rect.shrink2(egui::vec2(8.0, 4.0));
+
+        let card_rect = rect.shrink2(egui::vec2(LIST_SIDE_INSET, 2.0));
+        let corner = egui::CornerRadius::same(8);
+        let tint = cover_dominant.unwrap_or(accent_rgb());
+        let tint_solid = egui::Color32::from_rgb(tint[0], tint[1], tint[2]);
         if is_playing {
-            let tint = cover_dominant.unwrap_or(accent_rgb());
-            ui.painter().rect_filled(card_rect, corner, egui::Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], 22));
-            let bar = egui::Rect::from_min_size(card_rect.min, egui::vec2(3.0, card_rect.height()));
-            ui.painter().rect_filled(bar, egui::CornerRadius::same(0), theme::ACCENT);
+            ui.painter().rect_filled(card_rect, corner, egui::Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], 30));
+            ui.painter().rect_stroke(
+                card_rect,
+                corner,
+                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(tint[0], tint[1], tint[2], 62)),
+                egui::StrokeKind::Inside,
+            );
+            let pill = egui::Rect::from_center_size(
+                egui::pos2(card_rect.min.x + 4.5, card_rect.center().y),
+                egui::vec2(3.0, 22.0),
+            );
+            ui.painter().rect_filled(pill, egui::CornerRadius::same(2), tint_solid);
         } else if row_hovered {
-            ui.painter().rect_filled(card_rect, corner, theme::HOVER);
+            ui.painter().rect_filled(card_rect, corner, egui::Color32::from_white_alpha(11));
         }
 
-        let inner = rect.shrink2(egui::vec2(LIST_SIDE_INSET, 0.0));
         let cover_size = 40.0;
-        let cover_gap = 12.0;
-        let duration_w = 52.0;
-        let action_w = if delete_confirm { 170.0 } else { 52.0 };
-        let action_gap = 8.0;
-        let text_gap = 6.0;
+        let duration_w = 48.0;
+        let action_w = if delete_confirm { 166.0 } else { 28.0 };
         let duration_rect = egui::Rect::from_min_size(
-            egui::pos2(inner.max.x - duration_w, rect.min.y),
-            egui::vec2(duration_w, row_h),
+            egui::pos2(card_rect.max.x - 12.0 - duration_w, card_rect.min.y),
+            egui::vec2(duration_w, card_rect.height()),
         );
-        let action_right = duration_rect.min.x - action_gap;
         let action_rect = egui::Rect::from_min_size(
-            egui::pos2(action_right - action_w, rect.min.y),
-            egui::vec2(action_w, row_h),
+            egui::pos2(duration_rect.min.x - 10.0 - action_w, card_rect.min.y),
+            egui::vec2(action_w, card_rect.height()),
         );
         let cover_rect = egui::Rect::from_center_size(
-            egui::pos2(inner.min.x + cover_size * 0.5, rect.center().y),
+            egui::pos2(card_rect.min.x + 12.0 + cover_size * 0.5, card_rect.center().y),
             egui::vec2(cover_size, cover_size),
         );
-        let text_min_x = cover_rect.max.x + cover_gap;
-        let text_w = (action_rect.min.x - text_gap - text_min_x).max(40.0);
-        let text_rect = egui::Rect::from_min_size(egui::pos2(text_min_x, rect.min.y), egui::vec2(text_w, row_h));
+        let text_min_x = cover_rect.max.x + 12.0;
+        let text_w = (action_rect.min.x - 8.0 - text_min_x).max(40.0);
+        let text_h = 36.0;
+        let text_rect = egui::Rect::from_min_size(
+            egui::pos2(text_min_x, card_rect.center().y - text_h * 0.5),
+            egui::vec2(text_w, text_h),
+        );
 
         self.paint_cover(ui, cover_rect, cover_url.as_deref(), is_playing);
-
         self.ensure_cjk_font(ui.ctx(), &title_text);
         self.ensure_cjk_font(ui.ctx(), &artist_text);
 
         let dim = theme::MUTED.gamma_multiply(0.55);
-        let title_color = if !playable { dim } else if is_playing { theme::ACCENT } else { theme::TEXT };
+        let playing_title_color = if cover_dominant.is_some() {
+            tint_solid.lerp_to_gamma(egui::Color32::WHITE, 0.38)
+        } else {
+            theme::ACCENT
+        };
+        let title_color = if !playable { dim } else if is_playing { playing_title_color } else { theme::TEXT };
         let artist_color = if playable { theme::MUTED } else { dim };
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-        text_ui.set_min_height(row_h);
-        text_ui.add(egui::Label::new(egui::RichText::new(title_text).font(theme::semibold_font(14.0)).color(title_color)).selectable(false).truncate());
+        text_ui.spacing_mut().item_spacing.y = 2.0;
+        text_ui.add(egui::Label::new(egui::RichText::new(title_text).font(theme::semibold_font(13.5)).color(title_color)).selectable(false).truncate());
         text_ui.add(egui::Label::new(egui::RichText::new(artist_text).size(12.0).color(artist_color)).selectable(false).truncate());
 
         let mut duration_ui = ui.new_child(egui::UiBuilder::new().max_rect(duration_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        duration_ui.set_min_height(row_h);
+        duration_ui.set_min_height(card_rect.height());
         let time_color = if playable { theme::MUTED } else { dim };
         duration_ui.add(egui::Label::new(egui::RichText::new(dur).font(theme::mono_font(12.0)).color(time_color)).selectable(false));
 
-        let mut action_ui = ui.new_child(egui::UiBuilder::new().max_rect(action_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        action_ui.set_min_height(row_h);
+        let mut action_ui = ui.new_child(egui::UiBuilder::new().max_rect(action_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        action_ui.set_min_height(card_rect.height());
         let action_clicked = self.render_track_action(&mut action_ui, &track, source, &tid, &resp, pointer_over_row || delete_confirm);
         if !action_clicked && resp.clicked() {
             self.selected_index = Some(i);
@@ -3100,13 +3197,13 @@ impl eframe::App for GuiAppImpl {
         }
 
         let panel_frame = egui::Frame::new()
-            .fill(theme::PANEL)
+            .fill(egui::Color32::from_rgb(0x13, 0x13, 0x18))
             .stroke(egui::Stroke::NONE)
             .inner_margin(egui::Margin {
                 left: PANEL_MARGIN_X as i8,
                 right: PANEL_MARGIN_X as i8,
                 top: 0,
-                bottom: PANEL_BOTTOM_MARGIN as i8,
+                bottom: 0,
             });
         egui::Panel::bottom("bottom")
             .frame(panel_frame)
@@ -3117,16 +3214,20 @@ impl eframe::App for GuiAppImpl {
             .show(ui, |ui| {
                 let content = ui.available_rect_before_wrap();
                 let top_y = content.min.y;
-                let ambient = self.current_cover_medium()
-                    .and_then(|url| self.cover_cache.dominant_color(&url))
-                    .unwrap_or(accent_rgb());
-                draw_corner_glow(ui.painter(), content, ambient, 34);
+                let full_bar = egui::Rect::from_min_max(
+                    egui::pos2(content.min.x - PANEL_MARGIN_X, top_y),
+                    egui::pos2(content.max.x + PANEL_MARGIN_X, content.max.y),
+                );
+                let cover_dom = self.current_cover_medium()
+                    .and_then(|url| self.cover_cache.dominant_color(&url));
+                let ambient = cover_dom.unwrap_or(accent_rgb());
+                draw_ambient_wash(ui.painter(), full_bar, ambient, 56, 32);
                 ui.painter().line_segment(
                     [
-                        egui::pos2(content.min.x - PANEL_MARGIN_X, top_y),
-                        egui::pos2(content.max.x + PANEL_MARGIN_X, top_y),
+                        egui::pos2(full_bar.min.x, top_y + 0.5),
+                        egui::pos2(full_bar.max.x, top_y + 0.5),
                     ],
-                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(60)),
+                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(24)),
                 );
 
                 let has_duration = self.now_playing.as_ref()
@@ -3138,19 +3239,25 @@ impl eframe::App for GuiAppImpl {
                 let shown_pos = self.seek_drag.unwrap_or(pos).min(dur.max(1));
                 let fraction = if has_duration { shown_pos as f32 / dur.max(1) as f32 } else { 0.0 };
                 let progress_rect = egui::Rect::from_min_size(
-                    egui::pos2(content.min.x, top_y),
-                    egui::vec2(content.width(), PANEL_PROGRESS_HIT_H),
+                    egui::pos2(content.min.x, top_y + 1.0),
+                    egui::vec2(content.width(), 14.0),
                 );
                 let seek_resp = ui.interact(progress_rect, ui.make_persistent_id("bottom.seek"), egui::Sense::click_and_drag());
                 let seek_active = has_duration && (seek_resp.hovered() || seek_resp.dragged());
+                let seek_fill = if cover_dom.is_some() {
+                    egui::Color32::from_rgb(ambient[0], ambient[1], ambient[2]).lerp_to_gamma(egui::Color32::WHITE, 0.22)
+                } else {
+                    theme::ACCENT
+                };
                 paint_bar(
                     ui.painter(),
                     progress_rect.min.x,
                     progress_rect.max.x,
-                    top_y + 6.0,
+                    top_y + 8.0,
                     fraction,
                     if seek_active { 5.0 } else { 3.0 },
-                    true,
+                    seek_fill,
+                    seek_active,
                 );
                 if seek_active {
                     seek_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -3161,18 +3268,22 @@ impl eframe::App for GuiAppImpl {
                         let text = api::format_mm_ss((t * dur.max(1) as f32) as u64);
                         let tip_w = measure_label_width(ui, &text, theme::mono_font(11.0)) + 12.0;
                         let tip_x = pointer.x.clamp(progress_rect.min.x + tip_w * 0.5, progress_rect.max.x - tip_w * 0.5);
+                        let tp = ui.ctx().layer_painter(egui::LayerId::new(
+                            egui::Order::Tooltip,
+                            egui::Id::unique("bottom.seek.tip"),
+                        ));
                         let tip_rect = egui::Rect::from_center_size(
-                            egui::pos2(tip_x, top_y + 18.0),
-                            egui::vec2(tip_w, 18.0),
+                            egui::pos2(tip_x, top_y - 10.0),
+                            egui::vec2(tip_w, 20.0),
                         );
-                        ui.painter().rect_filled(tip_rect, egui::CornerRadius::same(5), egui::Color32::from_black_alpha(190));
-                        ui.painter().rect_stroke(
+                        tp.rect_filled(tip_rect, egui::CornerRadius::same(6), egui::Color32::from_rgba_unmultiplied(18, 18, 24, 240));
+                        tp.rect_stroke(
                             tip_rect,
-                            egui::CornerRadius::same(5),
-                            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(30)),
+                            egui::CornerRadius::same(6),
+                            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(32)),
                             egui::StrokeKind::Inside,
                         );
-                        ui.painter().text(
+                        tp.text(
                             tip_rect.center(),
                             egui::Align2::CENTER_CENTER,
                             text,
@@ -3195,31 +3306,16 @@ impl eframe::App for GuiAppImpl {
                     self.commit_seek(target);
                 }
 
-                let zones_top = top_y + PANEL_PROGRESS_HIT_H + 2.0;
-                let controls_cy = top_y + PANEL_HEIGHT * 0.5;
-                let button_gap = 16.0;
-                let max_left_w = content.width() - PANEL_CENTER_W - PANEL_RIGHT_W - 2.0 * button_gap;
-                let left_w = ((content.width() * 0.34).max(180.0)).min(max_left_w).max(150.0);
-                let zones_rect = egui::Rect::from_min_size(
-                    egui::pos2(content.min.x, zones_top),
-                    egui::vec2(content.width(), PANEL_ZONES_H),
-                );
-                let left_rect = egui::Rect::from_min_size(
-                    egui::pos2(zones_rect.min.x, zones_top),
-                    egui::vec2(left_w, PANEL_ZONES_H),
-                );
-                let right_rect = egui::Rect::from_min_size(
-                    egui::pos2(zones_rect.max.x - PANEL_RIGHT_W, zones_top),
-                    egui::vec2(PANEL_RIGHT_W, PANEL_ZONES_H),
-                );
-                let between = right_rect.min.x - left_rect.max.x;
-                let desired_center_x = left_rect.max.x + ((between - PANEL_CENTER_W) * 0.5).max(PANEL_ZONE_GAP);
-                let max_center_x = right_rect.min.x - PANEL_CENTER_W - button_gap;
-                let center_x = desired_center_x.clamp(left_rect.max.x + PANEL_ZONE_GAP, max_center_x.max(left_rect.max.x + PANEL_ZONE_GAP));
-                let center_rect = egui::Rect::from_min_size(
-                    egui::pos2(center_x, zones_top),
-                    egui::vec2(PANEL_CENTER_W, PANEL_ZONES_H),
-                );
+                let body_top = top_y + 15.0;
+                let body_cy = top_y + 52.0;
+                let btn_cy = body_top + 25.0;
+                let time_cy = body_top + 57.0;
+                let right_w = 162.0;
+                let right_min_x = content.max.x - right_w;
+                let center_half = 102.0;
+                let min_cx = content.min.x + 178.0 + center_half;
+                let max_cx = right_min_x - 16.0 - center_half;
+                let cx = content.center().x.clamp(min_cx.min(max_cx), max_cx);
 
                 let (title, artist, active) = if let Some(np) = &self.now_playing {
                     (np.title.clone(), np.artist.clone(), true)
@@ -3236,49 +3332,49 @@ impl eframe::App for GuiAppImpl {
                 self.ensure_cjk_font(ui.ctx(), &artist);
                 let cover_size = 52.0;
                 let cover_rect = egui::Rect::from_center_size(
-                    egui::pos2(left_rect.min.x + 16.0 + cover_size * 0.5, controls_cy),
+                    egui::pos2(content.min.x + 26.0, body_cy),
                     egui::vec2(cover_size, cover_size),
                 );
                 let current_cover = self.current_cover_medium();
                 self.paint_cover(ui, cover_rect, current_cover.as_deref(), false);
                 let text_left = cover_rect.max.x + 12.0;
+                let text_right = (cx - center_half - 10.0).max(text_left + 64.0);
                 let text_h = 36.0;
-                let text_rect = egui::Rect::from_min_size(
-                    egui::pos2(text_left, controls_cy - text_h * 0.5),
-                    egui::vec2((left_rect.max.x - text_left).max(60.0), text_h),
+                let text_rect = egui::Rect::from_min_max(
+                    egui::pos2(text_left, body_cy - text_h * 0.5),
+                    egui::pos2(text_right, body_cy + text_h * 0.5),
                 );
-                let title_hover = title.clone();
-                let artist_hover = artist.clone();
                 let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-                left_ui.set_min_height(text_h);
-                left_ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(title)
-                            .font(theme::semibold_font(14.0))
-                            .color(if active { theme::TEXT } else { theme::MUTED }),
-                    )
-                    .selectable(false)
-                    .truncate(),
-                )
-                .on_hover_text(title_hover);
-                left_ui.add(
-                    egui::Label::new(egui::RichText::new(artist).size(12.0).color(theme::MUTED))
+                left_ui.spacing_mut().item_spacing.y = 2.0;
+                if !title.is_empty() {
+                    left_ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(title)
+                                .font(theme::semibold_font(13.5))
+                                .color(if active { theme::TEXT } else { theme::MUTED }),
+                        )
                         .selectable(false)
                         .truncate(),
-                )
-                .on_hover_text(artist_hover);
+                    );
+                }
+                if !artist.is_empty() {
+                    left_ui.add(
+                        egui::Label::new(egui::RichText::new(artist).size(12.0).color(theme::MUTED))
+                            .selectable(false)
+                            .truncate(),
+                    );
+                }
 
                 let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
                 let play_icon = if paused || self.now_playing.is_none() { TransportIcon::Play } else { TransportIcon::Pause };
                 let play_tooltip = if matches!(play_icon, TransportIcon::Play) { PLAY_TOOLTIP } else { PAUSE_TOOLTIP };
                 let play_enabled = self.now_playing.is_some() || self.restored_track.is_some();
                 let side_enabled = self.now_playing.is_some();
-                let cx = center_rect.center().x;
-                let shuffle_rect = egui::Rect::from_center_size(egui::pos2(cx - 88.0, controls_cy), egui::vec2(26.0, 26.0));
-                let prev_rect = egui::Rect::from_center_size(egui::pos2(cx - 44.0, controls_cy), egui::vec2(30.0, 30.0));
-                let play_rect = egui::Rect::from_center_size(egui::pos2(cx, controls_cy), egui::vec2(36.0, 36.0));
-                let next_rect = egui::Rect::from_center_size(egui::pos2(cx + 44.0, controls_cy), egui::vec2(30.0, 30.0));
-                let repeat_rect = egui::Rect::from_center_size(egui::pos2(cx + 88.0, controls_cy), egui::vec2(26.0, 26.0));
+                let shuffle_rect = egui::Rect::from_center_size(egui::pos2(cx - 78.0, btn_cy), egui::vec2(28.0, 28.0));
+                let prev_rect = egui::Rect::from_center_size(egui::pos2(cx - 42.0, btn_cy), egui::vec2(30.0, 30.0));
+                let play_rect = egui::Rect::from_center_size(egui::pos2(cx, btn_cy), egui::vec2(36.0, 36.0));
+                let next_rect = egui::Rect::from_center_size(egui::pos2(cx + 42.0, btn_cy), egui::vec2(30.0, 30.0));
+                let repeat_rect = egui::Rect::from_center_size(egui::pos2(cx + 78.0, btn_cy), egui::vec2(28.0, 28.0));
                 if mode_button(ui, shuffle_rect, "bottom.shuffle", ModeIcon::Shuffle, self.shuffle, SHUFFLE_LABEL) {
                     self.toggle_shuffle();
                 }
@@ -3298,22 +3394,18 @@ impl eframe::App for GuiAppImpl {
                     storage::save_repeat(self.repeat_mode.as_str());
                 }
 
-                let time_rect = egui::Rect::from_min_size(
-                    egui::pos2(center_rect.min.x, zones_top + 40.0),
-                    egui::vec2(PANEL_CENTER_W, 14.0),
-                );
                 let dur_text = if has_duration { api::format_mm_ss(dur) } else { "--:--".to_string() };
                 ui.painter().text(
-                    time_rect.center(),
+                    egui::pos2(cx, time_cy),
                     egui::Align2::CENTER_CENTER,
                     format!("{} / {}", api::format_mm_ss(shown_pos), dur_text),
-                    theme::mono_font(12.0),
+                    theme::mono_font(11.0),
                     theme::MUTED,
                 );
 
                 let speaker_rect = egui::Rect::from_center_size(
-                    egui::pos2(right_rect.min.x + 14.0, controls_cy),
-                    egui::vec2(28.0, 28.0),
+                    egui::pos2(right_min_x + 13.0, body_cy),
+                    egui::vec2(26.0, 26.0),
                 );
                 let muted = self.volume <= 0.0;
                 draw_speaker(ui.painter(), speaker_rect.center(), muted);
@@ -3342,20 +3434,22 @@ impl eframe::App for GuiAppImpl {
                 }
 
                 let vol_bar_rect = egui::Rect::from_center_size(
-                    egui::pos2(right_rect.min.x + 34.0 + 52.0, controls_cy),
-                    egui::vec2(104.0, 20.0),
+                    egui::pos2(right_min_x + 32.0 + 44.0, body_cy),
+                    egui::vec2(88.0, 20.0),
                 );
                 let vol_resp = ui.interact(vol_bar_rect, ui.make_persistent_id("bottom.volume"), egui::Sense::click_and_drag());
+                let vol_active = vol_resp.hovered() || vol_resp.dragged();
                 paint_bar(
                     ui.painter(),
                     vol_bar_rect.min.x,
                     vol_bar_rect.max.x,
-                    controls_cy,
+                    body_cy,
                     self.volume,
-                    3.0,
-                    vol_resp.hovered(),
+                    if vol_active { 4.0 } else { 3.0 },
+                    if vol_active { seek_fill } else { egui::Color32::from_rgb(0xC8, 0xC8, 0xD2) },
+                    vol_active,
                 );
-                if vol_resp.hovered() {
+                if vol_active {
                     vol_resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
                 }
                 if vol_resp.clicked() || vol_resp.dragged() {
@@ -3370,15 +3464,11 @@ impl eframe::App for GuiAppImpl {
                     storage::save_volume(self.volume);
                 }
                 let pct = (self.volume * 100.0).round().clamp(0.0, 100.0) as i32;
-                let pct_rect = egui::Rect::from_center_size(
-                    egui::pos2(vol_bar_rect.max.x + 8.0 + 20.0, controls_cy),
-                    egui::vec2(40.0, 24.0),
-                );
                 ui.painter().text(
-                    pct_rect.center(),
-                    egui::Align2::CENTER_CENTER,
+                    egui::pos2(content.max.x, body_cy),
+                    egui::Align2::RIGHT_CENTER,
                     format!("{pct}%"),
-                    theme::mono_font(12.0),
+                    egui::FontId::proportional(11.5),
                     theme::MUTED,
                 );
 
@@ -3392,7 +3482,48 @@ impl eframe::App for GuiAppImpl {
                     status_parts.push(status);
                 }
                 let status = status_parts.join(" | ");
-                self.status_line(ui, &status, status_is_error(&status));
+                if !status.is_empty() {
+                    let is_err = status_is_error(&status);
+                    let font = egui::FontId::proportional(11.5);
+                    let max_w = (content.width() - 32.0).max(120.0);
+                    let text_w = measure_label_width(ui, &status, font.clone()).min(max_w - 24.0);
+                    let toast_rect = egui::Rect::from_center_size(
+                        egui::pos2(content.center().x, top_y - 16.0),
+                        egui::vec2(text_w + 24.0, 24.0),
+                    );
+                    let tp = ui.ctx().layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::unique("bottom.status.toast"),
+                    ));
+                    tp.rect_filled(
+                        toast_rect,
+                        egui::CornerRadius::same(12),
+                        egui::Color32::from_rgba_unmultiplied(20, 20, 26, 236),
+                    );
+                    tp.rect_stroke(
+                        toast_rect,
+                        egui::CornerRadius::same(12),
+                        egui::Stroke::new(
+                            1.0,
+                            if is_err { theme::WARN } else { egui::Color32::from_white_alpha(28) },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                    let galley = tp.layout(
+                        status,
+                        font,
+                        if is_err { theme::WARN } else { theme::TEXT },
+                        text_w + 4.0,
+                    );
+                    tp.galley(
+                        egui::pos2(
+                            toast_rect.center().x - galley.size().x * 0.5,
+                            toast_rect.center().y - galley.size().y * 0.5,
+                        ),
+                        galley,
+                        theme::TEXT,
+                    );
+                }
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -3408,7 +3539,7 @@ impl eframe::App for GuiAppImpl {
             let header_ambient = self.current_cover_medium()
                 .and_then(|url| self.cover_cache.dominant_color(&url))
                 .unwrap_or(accent_rgb());
-            draw_corner_glow(ui.painter(), top_rect, header_ambient, 16);
+            draw_top_glow(ui.painter(), top_rect, header_ambient, 26);
             ui.painter().line_segment(
                 [egui::pos2(top_rect.min.x, top_rect.max.y), egui::pos2(top_rect.max.x, top_rect.max.y)],
                 egui::Stroke::new(1.0, theme::BORDER),
@@ -3469,6 +3600,7 @@ impl eframe::App for GuiAppImpl {
                     let my_status_error = status_is_error(&self.my_status);
                     let my_status = self.my_status.clone();
                     self.status_line(ui, &my_status, my_status_error);
+                    ui.add_space(6.0);
                     let filter_before = self.my_filter.clone();
                     let mut filter_rect = egui::Rect::NOTHING;
                     ui.horizontal(|ui| {
@@ -3493,6 +3625,7 @@ impl eframe::App for GuiAppImpl {
                             }
                         }
                     });
+                    ui.add_space(4.0);
                     if self.my_filter != filter_before {
                         self.filter_autoload_stopped = false;
                         self.my_status.clear();
@@ -3502,14 +3635,14 @@ impl eframe::App for GuiAppImpl {
                     self.refresh_my_filter_cache();
                     let total = if filter_active { self.my_filter_cache.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
                     let count_text = format!("{} {}", total, tracks_word(total as u64));
-                    let count_w = measure_label_width(ui, &count_text, theme::mono_font(12.0));
+                    let count_w = measure_label_width(ui, &count_text, egui::FontId::proportional(12.0));
                     let count_rect = egui::Rect::from_min_size(
                         egui::pos2(ui.available_rect_before_wrap().max.x - LIST_SIDE_INSET - count_w, filter_rect.center().y - 14.0),
                         egui::vec2(count_w + 2.0, 28.0),
                     );
                     let mut count_ui = ui.new_child(egui::UiBuilder::new().max_rect(count_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
                     count_ui.set_min_height(28.0);
-                    count_ui.add(egui::Label::new(egui::RichText::new(count_text).font(theme::mono_font(12.0)).color(theme::MUTED)).selectable(false));
+                    count_ui.add(egui::Label::new(egui::RichText::new(count_text).font(egui::FontId::proportional(12.0)).color(theme::MUTED)).selectable(false));
                     let playing_tid = self.now_playing.as_ref().and_then(|np| np.track_id);
                     let list_rect = ui.available_rect_before_wrap();
                     let first_page = self.tracks.is_empty() && (self.loading_tracks || self.tracks_count.is_none());
@@ -3605,16 +3738,49 @@ impl eframe::App for GuiAppImpl {
                                         continue;
                                     }
                                     let pl = self.playlists[i].clone();
-                                    let count_txt = pl.count.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
-                                    let line = format!("{} ({})", pl.title, count_txt);
                                     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::click());
-                                    if resp.hovered() { ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill); }
-                                    let inner = rect.shrink2(egui::vec2(8.0, 0.0));
-                                    let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
-                                    let cover_size = 36.0;
-                                    let (cover_rect, _) = row_ui.allocate_exact_size(egui::vec2(cover_size, cover_size), egui::Sense::hover());
-                                    self.paint_cover(&row_ui, cover_rect, pl.cover_small.as_deref(), false);
-                                    row_ui.add(egui::Label::new(line).selectable(false).truncate());
+                                    let card_rect = rect.shrink2(egui::vec2(LIST_SIDE_INSET, 2.0));
+                                    let corner = egui::CornerRadius::same(8);
+                                    if resp.hovered() {
+                                        ui.painter().rect_filled(card_rect, corner, egui::Color32::from_white_alpha(11));
+                                    }
+                                    let cover_size = 40.0;
+                                    let cover_rect = egui::Rect::from_center_size(
+                                        egui::pos2(card_rect.min.x + 12.0 + cover_size * 0.5, card_rect.center().y),
+                                        egui::vec2(cover_size, cover_size),
+                                    );
+                                    self.paint_cover(ui, cover_rect, pl.cover_small.as_deref(), false);
+                                    let c = pl.count.unwrap_or(0);
+                                    let count_txt = format!("{} {}", c, tracks_word(c));
+                                    let count_font = egui::FontId::proportional(12.0);
+                                    let count_w = measure_label_width(ui, &count_txt, count_font.clone());
+                                    let count_rect = egui::Rect::from_min_max(
+                                        egui::pos2(card_rect.max.x - 12.0 - count_w, card_rect.min.y),
+                                        egui::pos2(card_rect.max.x - 12.0, card_rect.max.y),
+                                    );
+                                    let title_rect = egui::Rect::from_min_max(
+                                        egui::pos2(cover_rect.max.x + 12.0, card_rect.min.y),
+                                        egui::pos2((count_rect.min.x - 12.0).max(cover_rect.max.x + 20.0), card_rect.max.y),
+                                    );
+                                    let mut title_ui = ui.new_child(egui::UiBuilder::new().max_rect(title_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                                    title_ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(pl.title)
+                                                .font(theme::semibold_font(13.5))
+                                                .color(theme::TEXT),
+                                        )
+                                        .selectable(false)
+                                        .truncate(),
+                                    );
+                                    let mut count_ui = ui.new_child(egui::UiBuilder::new().max_rect(count_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                                    count_ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(count_txt)
+                                                .font(count_font)
+                                                .color(theme::MUTED),
+                                        )
+                                        .selectable(false),
+                                    );
                                     if resp.clicked() { self.open_playlist(i); }
                                 }
                                 if range.end + 10 >= self.playlists.len() && !self.loading_playlists { self.request_playlists_load(); }
@@ -3626,11 +3792,13 @@ impl eframe::App for GuiAppImpl {
                     }
                 }
                 Tab::Search => {
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        ui.add_space(LIST_SIDE_INSET);
                         let button_w = 84.0;
                         let field_w = (ui.available_width() - button_w - 12.0).max(160.0);
                         let (field_rect, _) = ui.allocate_exact_size(egui::vec2(field_w, 30.0), egui::Sense::hover());
-                        let resp = styled_search_field(ui, field_rect, &mut self.search_input, ui.scope_id().with("vkmusic.search"), FILTER_HINT);
+                        let resp = styled_search_field(ui, field_rect, &mut self.search_input, ui.scope_id().with("vkmusic.search"), SEARCH_HINT);
                         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let (button_rect, _) = ui.allocate_exact_size(egui::vec2(button_w, 30.0), egui::Sense::hover());
                         let clicked = ghost_pill_button(ui, button_rect, "search.find", "\u{041D}\u{0430}\u{0439}\u{0442}\u{0438}");
@@ -3678,7 +3846,9 @@ impl eframe::App for GuiAppImpl {
                     if !self.rec_loaded_once && !self.rec_loading {
                         self.request_recommendations(false);
                     }
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        ui.add_space(LIST_SIDE_INSET);
                         let (button_rect, _) = ui.allocate_exact_size(egui::vec2(84.0, 30.0), egui::Sense::hover());
                         let clicked = ghost_pill_button(ui, button_rect, "rec.refresh", "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}");
                         if clicked && !self.rec_loading {
