@@ -53,8 +53,19 @@ const MUTE_TOOLTIP: &str = "\u{0412}\u{044B}\u{043A}\u{043B}\u{044E}\u{0447}\u{0
 const UNMUTE_TOOLTIP: &str = "\u{0412}\u{043A}\u{043B}\u{044E}\u{0447}\u{0438}\u{0442}\u{044C} \u{0437}\u{0432}\u{0443}\u{043A}";
 const MENU_TOOLTIP: &str = "\u{041C}\u{0435}\u{043D}\u{044E}";
 const LOGOUT_LABEL: &str = "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}";
-const FILTER_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{043F}\u{043E} \u{043C}\u{043E}\u{0435}\u{0439} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0438}";
-const TRACKS_SUFFIX: &str = " \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
+const FILTER_HINT: &str = "\u{041F}\u{043E}\u{0438}\u{0441}\u{043A} \u{043F}\u{043E} \u{043C}\u{043E}\u{0435}\u{0439} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0435}";
+
+fn tracks_word(n: u64) -> &'static str {
+    let mod10 = n % 10;
+    let mod100 = n % 100;
+    if mod10 == 1 && mod100 != 11 {
+        "\u{0442}\u{0440}\u{0435}\u{043A}"
+    } else if (2..=4).contains(&mod10) && !(12..=14).contains(&mod100) {
+        "\u{0442}\u{0440}\u{0435}\u{043A}\u{0430}"
+    } else {
+        "\u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}"
+    }
+}
 const LOADING_MORE_TEXT: &str = "\u{0437}\u{0430}\u{0433}\u{0440}\u{0443}\u{0436}\u{0430}\u{044E} \u{0435}\u{0449}\u{0451}\u{2026}";
 const EMPTY_MY_MUSIC_MAIN: &str = "\u{043F}\u{0443}\u{0441}\u{0442}\u{043E}. \u{043A}\u{0430}\u{043A} \u{0432}\u{043D}\u{0443}\u{0442}\u{0440}\u{0438}.";
 const EMPTY_MY_MUSIC_SUB: &str = "\u{0434}\u{043E}\u{0431}\u{0430}\u{0432}\u{044C} \u{0447}\u{0442}\u{043E}-\u{043D}\u{0438}\u{0431}\u{0443}\u{0434}\u{044C} \u{0447}\u{0435}\u{0440}\u{0435}\u{0437} \u{043F}\u{043E}\u{0438}\u{0441}\u{043A}";
@@ -2678,7 +2689,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
         let playable = track.is_playable();
         let dur = track.duration_secs.map(api::format_mm_ss).unwrap_or_else(|| "--:--".to_string());
-        let idx_text = format!("{:>2}", i + 1);
+        let idx_text = format!("{}", i + 1);
         let title_text = track.title.clone();
         let artist_text = track.artist.clone();
         self.ensure_cjk_font(ui.ctx(), &title_text);
@@ -2702,9 +2713,10 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         }
 
         let inner = rect.shrink2(egui::vec2(10.0, 0.0));
+        let index_w = 28.0;
+        let index_gap = 8.0;
         let cover_size = 36.0;
         let cover_gap = 8.0;
-        let index_w = 24.0;
         let duration_w = 52.0;
         let action_w = if delete_confirm { 170.0 } else { 52.0 };
         let action_gap = 8.0;
@@ -2718,19 +2730,19 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             egui::pos2(action_right - action_w, rect.min.y),
             egui::vec2(action_w, row_h),
         );
+        let left_rect = egui::Rect::from_min_size(egui::pos2(inner.min.x, rect.min.y), egui::vec2(index_w, row_h));
+        let cover_left = inner.min.x + index_w + index_gap;
         let cover_rect = egui::Rect::from_center_size(
-            egui::pos2(inner.min.x + cover_size * 0.5, rect.center().y),
+            egui::pos2(cover_left + cover_size * 0.5, rect.center().y),
             egui::vec2(cover_size, cover_size),
         );
-        let index_left = inner.min.x + cover_size + cover_gap;
-        let text_min_x = index_left + index_w + text_gap;
+        let text_min_x = cover_left + cover_size + cover_gap;
         let text_w = (action_rect.min.x - text_gap - text_min_x).max(40.0);
-        let left_rect = egui::Rect::from_min_size(egui::pos2(index_left, rect.min.y), egui::vec2(index_w, row_h));
         let text_rect = egui::Rect::from_min_size(egui::pos2(text_min_x, rect.min.y), egui::vec2(text_w, row_h));
 
         self.paint_cover(ui, cover_rect, track.cover_small.as_deref());
 
-        let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
         left_ui.set_min_height(row_h);
         if is_playing {
             draw_playing_marker(ui, left_rect, paused);
@@ -2791,7 +2803,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 false
             }
             AddState::Done => {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
                 let c = rect.center();
                 let stroke = egui::Stroke::new(1.5, theme::ACCENT);
                 ui.painter().line_segment([c + egui::vec2(-5.0, 0.0), c + egui::vec2(-1.5, 3.5)], stroke);
@@ -2799,10 +2811,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 false
             }
             AddState::Idle => {
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                 let color = if resp.hovered() { theme::ACCENT } else { theme::MUTED };
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), theme::HOVER);
+                }
                 let center = rect.center();
-                let r = 5.0;
+                let r = 5.5;
                 ui.painter().line_segment([center - egui::vec2(r, 0.0), center + egui::vec2(r, 0.0)], egui::Stroke::new(1.5, color));
                 ui.painter().line_segment([center - egui::vec2(0.0, r), center + egui::vec2(0.0, r)], egui::Stroke::new(1.5, color));
                 let resp = resp.on_hover_text(ADD_TRACK_TOOLTIP);
@@ -2813,10 +2828,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 false
             }
             AddState::Error(msg) => {
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                 let color = if resp.hovered() { theme::ACCENT } else { theme::MUTED };
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), theme::HOVER);
+                }
                 let center = rect.center();
-                let r = 5.0;
+                let r = 5.5;
                 ui.painter().line_segment([center - egui::vec2(r, 0.0), center + egui::vec2(r, 0.0)], egui::Stroke::new(1.5, color));
                 ui.painter().line_segment([center - egui::vec2(0.0, r), center + egui::vec2(0.0, r)], egui::Stroke::new(1.5, color));
                 let resp = resp.on_hover_text(format!("{}\n{}", ADD_TRACK_TOOLTIP, msg));
@@ -2834,10 +2852,13 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
         match state {
             DeleteState::Idle => {
                 if !visible { return false; }
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                 let color = if resp.hovered() { theme::WARN } else { theme::MUTED };
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), theme::HOVER);
+                }
                 let center = rect.center();
-                let r = 5.0;
+                let r = 5.5;
                 ui.painter().line_segment([center - egui::vec2(r, r), center + egui::vec2(r, r)], egui::Stroke::new(1.5, color));
                 ui.painter().line_segment([center + egui::vec2(-r, r), center + egui::vec2(r, -r)], egui::Stroke::new(1.5, color));
                 let resp = resp.on_hover_text(REMOVE_TRACK_TOOLTIP);
@@ -3409,7 +3430,7 @@ impl eframe::App for GuiAppImpl {
                     let filter_active = !self.my_filter.trim().is_empty();
                     self.refresh_my_filter_cache();
                     let total = if filter_active { self.my_filter_cache.len() } else { self.tracks_count.unwrap_or(self.tracks.len() as u64) as usize };
-                    let count_text = format!("{}{}", total, TRACKS_SUFFIX);
+                    let count_text = format!("{} {}", total, tracks_word(total as u64));
                     let count_w = measure_label_width(ui, &count_text, theme::mono_font(12.0));
                     let count_x = ui.available_rect_before_wrap().max.x - 12.0 - count_w;
                     ui.painter().text(
@@ -3677,5 +3698,16 @@ mod tests {
         let mut rng = Xorshift64::from_seed(0x1234_5678_9ABC_DEF0);
         assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, None), Some(tid(7)));
         assert_eq!(pick_shuffle_id(&candidates, &played, &mut rng, Some(tid(7))), None);
+    }
+
+    #[test]
+    fn declines_track_counter() {
+        assert_eq!(tracks_word(0), "\u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}");
+        assert_eq!(tracks_word(1), "\u{0442}\u{0440}\u{0435}\u{043A}");
+        assert_eq!(tracks_word(2), "\u{0442}\u{0440}\u{0435}\u{043A}\u{0430}");
+        assert_eq!(tracks_word(5), "\u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}");
+        assert_eq!(tracks_word(11), "\u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}");
+        assert_eq!(tracks_word(21), "\u{0442}\u{0440}\u{0435}\u{043A}");
+        assert_eq!(tracks_word(2041), "\u{0442}\u{0440}\u{0435}\u{043A}");
     }
 }

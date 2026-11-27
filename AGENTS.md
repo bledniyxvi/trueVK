@@ -50,8 +50,8 @@ Path: C:\dev\vkmusic. Shell: PowerShell on Windows 11. The user writes in Russia
 anyhow, eframe 0.37.0 (glow, default_fonts, clipboard), keyring 4.2.0 (v1, windows-native-keyring-store), reqwest 0.13.5 (blocking, json, rustls), rodio 0.23.0 (playback, mp3), serde, serde_json, global-hotkey 0.10.0, tray-icon 0.26.1 (pulls muda), image 0.25.10 (default-features = false; jpeg, png). No windows-sys.
 
 ## Stages
-Done: 1 CLI, 1.5 probes, 2a play from RAM, 3a GUI skeleton, 3b queue/volume/seek, UI layout, 3d saved login + volume, 3c playlists and search, add/remove music ("+" and "×" with confirmation), 3e recommendations tab, 4a media keys + last track, 4b tray, 4c single instance/shuffle/repeat/filter/tray tooltip, 5 async cancellable player + code-based auth errors + reliable single instance + tests, 6 sound polish (volume curve, fades, device recovery), similar tracks, save MP3, log/monitor/font optimizations, VK track and playlist cover art (RAM-only LRU).
-Next: final polish: texts and colors in one place, look of "+" and "×", English "Log out" label to Russian, window/tray/exe icon, hide the console window, CS2 resource measurement.
+Done: 1 CLI, 1.5 probes, 2a play from RAM, 3a GUI skeleton, 3b queue/volume/seek, UI layout, 3d saved login + volume, 3c playlists and search, add/remove music ("+" and "×" with confirmation), 3e recommendations tab, 4a media keys + last track, 4b tray, 4c single instance/shuffle/repeat/filter/tray tooltip, 5 async cancellable player + code-based auth errors + reliable single instance + tests, 6 sound polish (volume curve, fades, device recovery), similar tracks, save MP3, log/monitor/font optimizations, VK track and playlist cover art (RAM-only LRU), final polish: filter hint fixed, track counter pluralization, track row reorder (number/cover/title), Log out → Russian, +/× alignment, console hidden in release.
+Next: window/tray/exe icon, CS2 resource measurement.
 
 ## Diagnostics
 VKMUSIC_FPS=1 prints "passes: N, frames: M, logic: K" to stderr every 10 s. Idle target: about 10 passes per 10 s. Resource targets: about 0% CPU while playing/idle, RAM soft target under 150 MB.
