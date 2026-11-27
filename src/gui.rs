@@ -35,7 +35,7 @@ const HOTKEY_NAME_NEXT: &str = "\u{0414}\u{0430}\u{043b}\u{0435}\u{0435}";
 const HOTKEY_NAME_PREV: &str = "\u{041d}\u{0430}\u{0437}\u{0430}\u{0434}";
 const SHUFFLE_LABEL: &str = "\u{041F}\u{0435}\u{0440}\u{0435}\u{043C}\u{0435}\u{0448}\u{0430}\u{0442}\u{044C}";
 const REC_NO_SUITABLE_TRACKS_TEXT: &str = "\u{0411}\u{043E}\u{043B}\u{044C}\u{0448}\u{0435} \u{043D}\u{0435}\u{0442} \u{043F}\u{043E}\u{0434}\u{0445}\u{043E}\u{0434}\u{044F}\u{0449}\u{0438}\u{0445} \u{0442}\u{0440}\u{0435}\u{043A}\u{043E}\u{0432}";
-const TRACK_ROW_HEIGHT: f32 = 44.0;
+const TRACK_ROW_HEIGHT: f32 = 46.0;
 const ADD_TRACK_TOOLTIP: &str = "\u{0414}\u{043E}\u{0431}\u{0430}\u{0432}\u{0438}\u{0442}\u{044C} \u{0432} \u{043C}\u{043E}\u{044E} \u{043C}\u{0443}\u{0437}\u{044B}\u{043A}\u{0443}";
 const REMOVE_TRACK_TOOLTIP: &str = "\u{0423}\u{0434}\u{0430}\u{043B}\u{0438}\u{0442}\u{044C}";
 const NOTHING_PLAYING_TEXT: &str = "\u{041D}\u{0438}\u{0447}\u{0435}\u{0433}\u{043E} \u{043D}\u{0435} \u{0438}\u{0433}\u{0440}\u{0430}\u{0435}\u{0442}";
@@ -87,8 +87,8 @@ const PANEL_BOTTOM_MARGIN: f32 = 10.0;
 const PANEL_PROGRESS_HIT_H: f32 = 14.0;
 const PANEL_ZONES_H: f32 = 92.0;
 const PANEL_CENTER_W: f32 = 240.0;
-const PANEL_RIGHT_W: f32 = 220.0;
-const PANEL_ZONE_GAP: f32 = 3.0;
+const PANEL_RIGHT_W: f32 = 200.0;
+const PANEL_ZONE_GAP: f32 = 2.0;
 const LOGIN_OPEN_LABEL: &str = "\u{41e}\u{442}\u{43a}\u{440}\u{44b}\u{442}\u{44c}\u{20}\u{56}\u{4b}";
 const LOGIN_COPY_LABEL: &str = "\u{421}\u{43a}\u{43e}\u{43f}\u{438}\u{440}\u{43e}\u{432}\u{430}\u{442}\u{44c}\u{20}\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{443}";
 const LOGIN_PASTE_LABEL: &str = "\u{412}\u{441}\u{442}\u{430}\u{432}\u{438}\u{442}\u{44c}";
@@ -334,17 +334,26 @@ fn draw_skeleton_rows(ui: &mut egui::Ui, rect: egui::Rect, row_h: f32) {
     let widths = [0.42, 0.55, 0.34, 0.48, 0.30, 0.52, 0.38, 0.50, 0.33];
     let sub_widths = [0.24, 0.27, 0.21, 0.26, 0.20, 0.30, 0.23, 0.25, 0.22];
     let radius = egui::CornerRadius::same(4);
-    let inset = 10.0;
-    let number_w = 30.0;
+    let inset = 6.0;
+    let number_w = 28.0;
+    let cover_total = 36.0 + 8.0 + 8.0;
     let duration_w = 38.0;
-    let text_left = rect.min.x + inset + 44.0;
-    let text_w = (rect.width() - inset * 2.0 - 44.0 - duration_w - 12.0).max(80.0);
+    let text_left = rect.min.x + inset + number_w + cover_total;
+    let text_w = (rect.width() - inset * 2.0 - number_w - cover_total - duration_w - 12.0).max(80.0);
     for i in 0..9 {
         let cy = rect.min.y + row_h * (i as f32) + row_h * 0.5;
         painter.rect_filled(
             egui::Rect::from_center_size(
                 egui::pos2(rect.min.x + inset + number_w * 0.5, cy),
                 egui::vec2(number_w, 8.0),
+            ),
+            radius,
+            theme::SURFACE,
+        );
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.min.x + inset + number_w + 8.0 + 36.0 * 0.5, cy),
+                egui::vec2(36.0, 36.0),
             ),
             radius,
             theme::SURFACE,
@@ -2662,6 +2671,19 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
                 egui::Stroke::new(1.0, theme::BORDER),
                 egui::StrokeKind::Inside,
             );
+            let cx = rect.center().x;
+            let cy = rect.center().y;
+            let icon_color = theme::MUTED.gamma_multiply(0.6);
+            let r = (rect.width().min(rect.height()) * 0.35).max(6.0);
+            ui.painter().circle_stroke(egui::pos2(cx + r * 0.55, cy - r * 0.3), r * 0.35, egui::Stroke::new(1.5, icon_color));
+            ui.painter().line_segment(
+                [egui::pos2(cx + r * 0.9, cy - r * 0.3), egui::pos2(cx + r * 0.9, cy + r * 0.9)],
+                egui::Stroke::new(1.5, icon_color),
+            );
+            ui.painter().line_segment(
+                [egui::pos2(cx - r * 0.2, cy + r * 0.9), egui::pos2(cx + r * 1.1, cy + r * 0.55)],
+                egui::Stroke::new(1.5, icon_color),
+            );
         }
     }
 
@@ -2712,7 +2734,7 @@ fn remove_track_locally(&mut self, track_id: TrackId) {
             ui.painter().rect_filled(rect, corner, theme::HOVER);
         }
 
-        let inner = rect.shrink2(egui::vec2(10.0, 0.0));
+        let inner = rect.shrink2(egui::vec2(6.0, 0.0));
         let index_w = 28.0;
         let index_gap = 8.0;
         let cover_size = 36.0;
@@ -3144,13 +3166,15 @@ impl eframe::App for GuiAppImpl {
                 let current_cover = self.current_cover_medium();
                 self.paint_cover(ui, cover_rect, current_cover.as_deref());
                 let text_left = cover_rect.max.x + 12.0;
+                let text_h = 36.0;
                 let text_rect = egui::Rect::from_min_size(
-                    egui::pos2(text_left, left_rect.min.y),
-                    egui::vec2((left_rect.max.x - text_left).max(40.0), PANEL_ZONES_H),
+                    egui::pos2(text_left, left_rect.min.y + (PANEL_ZONES_H - text_h) * 0.5),
+                    egui::vec2((left_rect.max.x - text_left).max(60.0), text_h),
                 );
+                let title_hover = title.clone();
+                let artist_hover = artist.clone();
                 let mut left_ui = ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
-                left_ui.set_min_height(PANEL_ZONES_H);
-                left_ui.add_space(1.0);
+                left_ui.set_min_height(text_h);
                 left_ui.add(
                     egui::Label::new(
                         egui::RichText::new(title)
@@ -3159,12 +3183,14 @@ impl eframe::App for GuiAppImpl {
                     )
                     .selectable(false)
                     .truncate(),
-                );
+                )
+                .on_hover_text(title_hover);
                 left_ui.add(
                     egui::Label::new(egui::RichText::new(artist).size(12.0).color(theme::MUTED))
                         .selectable(false)
                         .truncate(),
-                );
+                )
+                .on_hover_text(artist_hover);
 
                 let paused = self.now_playing.as_ref().map(|np| np.paused).unwrap_or(false);
                 let play_icon = if paused || self.now_playing.is_none() { TransportIcon::Play } else { TransportIcon::Pause };
@@ -3235,7 +3261,7 @@ impl eframe::App for GuiAppImpl {
 
                 let vol_bar_rect = egui::Rect::from_min_size(
                     egui::pos2(right_rect.min.x + 34.0, zones_top + 18.0),
-                    egui::vec2(130.0, 8.0),
+                    egui::vec2(115.0, 8.0),
                 );
                 let vol_resp = ui.interact(vol_bar_rect, ui.make_persistent_id("bottom.volume"), egui::Sense::click_and_drag());
                 paint_bar(
