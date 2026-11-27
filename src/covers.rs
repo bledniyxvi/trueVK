@@ -1,5 +1,5 @@
 use eframe::egui;
-use image::GenericImageView;
+use image::{GenericImageView, RgbaImage};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
@@ -14,7 +14,45 @@ pub fn build_client(user_agent: &str) -> Option<reqwest::blocking::Client> {
         .ok()
 }
 
-pub fn load_cover(client: &reqwest::blocking::Client, url: &str) -> Option<egui::ColorImage> {
+pub fn compute_dominant_color_from_rgba(rgba: &RgbaImage) -> Option<[u8; 3]> {
+    let (width, height) = rgba.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let mut r_sum: u32 = 0;
+    let mut g_sum: u32 = 0;
+    let mut b_sum: u32 = 0;
+    let mut count: u32 = 0;
+    let step = 4usize;
+    for y in (0..height as usize).step_by(step) {
+        for x in (0..width as usize).step_by(step) {
+            let [r, g, b, _a] = rgba.get_pixel(x as u32, y as u32).0;
+            let sum = r as u32 + g as u32 + b as u32;
+            if sum < 60 || sum > 700 {
+                continue;
+            }
+            let max = r.max(g).max(b);
+            let min = r.min(g).min(b);
+            if max - min < 25 {
+                continue;
+            }
+            r_sum += r as u32;
+            g_sum += g as u32;
+            b_sum += b as u32;
+            count += 1;
+        }
+    }
+    if count < 4 {
+        return None;
+    }
+    Some([
+        (r_sum / count) as u8,
+        (g_sum / count) as u8,
+        (b_sum / count) as u8,
+    ])
+}
+
+pub fn load_cover(client: &reqwest::blocking::Client, url: &str) -> Option<(egui::ColorImage, Option<[u8; 3]>)> {
     let response = client.get(url).send().ok()?;
     if !response.status().is_success() {
         return None;
@@ -26,15 +64,16 @@ pub fn load_cover(client: &reqwest::blocking::Client, url: &str) -> Option<egui:
         return None;
     }
     let rgba = decoded.to_rgba8();
-    Some(egui::ColorImage::from_rgba_unmultiplied(
-        [width as usize, height as usize],
-        rgba.as_raw(),
+    let color = compute_dominant_color_from_rgba(&rgba);
+    Some((
+        egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba.as_raw()),
+        color,
     ))
 }
 
 pub enum CoverSlot {
     Loading,
-    Ready(egui::TextureHandle),
+    Ready(egui::TextureHandle, Option<[u8; 3]>),
     Failed,
 }
 
@@ -67,15 +106,15 @@ impl CoverCache {
 
     pub fn mark_failed(&mut self, url: &str) {
         let previous = self.slots.insert(url.to_string(), CoverSlot::Failed);
-        if matches!(previous, Some(CoverSlot::Ready(_))) {
+        if matches!(previous, Some(CoverSlot::Ready(_, _))) {
             self.ready_count = self.ready_count.saturating_sub(1);
         }
     }
 
-    pub fn insert_ready(&mut self, url: String, texture: egui::TextureHandle) {
-        let previous = self.slots.insert(url.clone(), CoverSlot::Ready(texture));
+    pub fn insert_ready(&mut self, url: String, texture: egui::TextureHandle, dominant_color: Option<[u8; 3]>) {
+        let previous = self.slots.insert(url.clone(), CoverSlot::Ready(texture, dominant_color));
         match previous {
-            Some(CoverSlot::Ready(_)) => {}
+            Some(CoverSlot::Ready(_, _)) => {}
             _ => {
                 self.ready_count += 1;
                 self.order.push_back(url);
@@ -86,13 +125,20 @@ impl CoverCache {
 
     pub fn texture(&mut self, url: &str) -> Option<egui::TextureHandle> {
         let texture = match self.slots.get(url) {
-            Some(CoverSlot::Ready(texture)) => Some(texture.clone()),
+            Some(CoverSlot::Ready(texture, _)) => Some(texture.clone()),
             _ => None,
         };
         if texture.is_some() {
             self.touch(url);
         }
         texture
+    }
+
+    pub fn dominant_color(&self, url: &str) -> Option<[u8; 3]> {
+        match self.slots.get(url) {
+            Some(CoverSlot::Ready(_, color)) => *color,
+            _ => None,
+        }
     }
 
     fn touch(&mut self, url: &str) {
@@ -109,10 +155,32 @@ impl CoverCache {
                 Some(url) => url,
                 None => break,
             };
-            if matches!(self.slots.get(&url), Some(CoverSlot::Ready(_))) {
+            if matches!(self.slots.get(&url), Some(CoverSlot::Ready(_, _))) {
                 self.slots.remove(&url);
                 self.ready_count = self.ready_count.saturating_sub(1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Rgba;
+
+    #[test]
+    fn dominant_color_for_saturated_image() {
+        let rgba = RgbaImage::from_pixel(8, 8, Rgba([100, 150, 200, 255]));
+        let color = compute_dominant_color_from_rgba(&rgba).expect("saturated image should have a dominant color");
+        assert!((color[0] as i32 - 100).abs() <= 10);
+        assert!((color[1] as i32 - 150).abs() <= 10);
+        assert!((color[2] as i32 - 200).abs() <= 10);
+    }
+
+    #[test]
+    fn dominant_color_none_for_black_and_gray() {
+        assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([0, 0, 0, 255]))).is_none());
+        assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([128, 128, 128, 255]))).is_none());
+        assert!(compute_dominant_color_from_rgba(&RgbaImage::from_pixel(8, 8, Rgba([255, 255, 255, 255]))).is_none());
     }
 }
